@@ -532,6 +532,20 @@ pub struct BucketSummary {
     pub is_complete: bool,
 }
 
+/// Whether a full bucket sync has completed (sync_meta row exists). While a
+/// full sync + incremental cache updates hold, the local cache is
+/// authoritative for browsing this bucket.
+pub async fn has_full_sync(bucket: &str, account_id: &str) -> DbResult<bool> {
+    let conn = get_connection()?.lock().await;
+    let mut meta_rows = conn
+        .query(
+            "SELECT 1 FROM sync_meta WHERE bucket = ?1 AND account_id = ?2",
+            turso::params![bucket, account_id],
+        )
+        .await?;
+    Ok(meta_rows.next().await?.is_some())
+}
+
 /// Get a bucket-wide summary (total file count + total size).
 ///
 /// Resolution order:
@@ -544,16 +558,7 @@ pub async fn get_bucket_summary(bucket: &str, account_id: &str) -> DbResult<Buck
     // sync_meta only exists after a full sync finished — it both gates the
     // directory-tree shortcut and distinguishes a genuinely empty bucket
     // (complete) from not-yet-synced lazy data in the aggregate fallback.
-    let has_full_sync = {
-        let conn = get_connection()?.lock().await;
-        let mut meta_rows = conn
-            .query(
-                "SELECT 1 FROM sync_meta WHERE bucket = ?1 AND account_id = ?2",
-                turso::params![bucket, account_id],
-            )
-            .await?;
-        meta_rows.next().await?.is_some()
-    };
+    let has_full_sync = has_full_sync(bucket, account_id).await?;
 
     if has_full_sync {
         if let Some(root) = get_directory_node(bucket, account_id, "").await? {
@@ -594,6 +599,21 @@ pub async fn get_bucket_summary(bucket: &str, account_id: &str) -> DbResult<Buck
     }
 }
 
+fn directory_node_from_row(row: &turso::Row) -> DbResult<CachedDirectoryNode> {
+    Ok(CachedDirectoryNode {
+        bucket: row.get(0)?,
+        account_id: row.get(1)?,
+        path: row.get(2)?,
+        parent_path: row.get(3)?,
+        file_count: row.get(4)?,
+        total_file_count: row.get(5)?,
+        size: row.get(6)?,
+        total_size: row.get(7)?,
+        last_modified: row.get(8)?,
+        last_updated: row.get(9)?,
+    })
+}
+
 /// Get directory node by path
 pub async fn get_directory_node(
     bucket: &str,
@@ -609,21 +629,36 @@ pub async fn get_directory_node(
     ).await?;
 
     if let Some(row) = rows.next().await? {
-        Ok(Some(CachedDirectoryNode {
-            bucket: row.get(0)?,
-            account_id: row.get(1)?,
-            path: row.get(2)?,
-            parent_path: row.get(3)?,
-            file_count: row.get(4)?,
-            total_file_count: row.get(5)?,
-            size: row.get(6)?,
-            total_size: row.get(7)?,
-            last_modified: row.get(8)?,
-            last_updated: row.get(9)?,
-        }))
+        Ok(Some(directory_node_from_row(&row)?))
     } else {
         Ok(None)
     }
+}
+
+/// Get directory nodes for many paths in one lock acquisition. Result is
+/// aligned with `paths` (None where no node exists). Collapses the
+/// per-subfolder query round-trips a folder view used to make.
+pub async fn get_directory_nodes(
+    bucket: &str,
+    account_id: &str,
+    paths: &[String],
+) -> DbResult<Vec<Option<CachedDirectoryNode>>> {
+    let conn = get_connection()?.lock().await;
+    let mut nodes = Vec::with_capacity(paths.len());
+    for path in paths {
+        let mut rows = conn.query(
+            "SELECT bucket, account_id, path, parent_path, file_count, total_file_count, size, total_size, last_modified, last_updated
+             FROM directory_tree
+             WHERE bucket = ?1 AND account_id = ?2 AND path = ?3",
+            turso::params![bucket, account_id, path.clone()]
+        ).await?;
+
+        match rows.next().await? {
+            Some(row) => nodes.push(Some(directory_node_from_row(&row)?)),
+            None => nodes.push(None),
+        }
+    }
+    Ok(nodes)
 }
 
 /// Get all directory nodes for a bucket
@@ -642,18 +677,7 @@ pub async fn get_all_directory_nodes(
 
     let mut nodes = Vec::new();
     while let Some(row) = rows.next().await? {
-        nodes.push(CachedDirectoryNode {
-            bucket: row.get(0)?,
-            account_id: row.get(1)?,
-            path: row.get(2)?,
-            parent_path: row.get(3)?,
-            file_count: row.get(4)?,
-            total_file_count: row.get(5)?,
-            size: row.get(6)?,
-            total_size: row.get(7)?,
-            last_modified: row.get(8)?,
-            last_updated: row.get(9)?,
-        });
+        nodes.push(directory_node_from_row(&row)?);
     }
     Ok(nodes)
 }

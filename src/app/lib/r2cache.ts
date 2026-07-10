@@ -228,6 +228,11 @@ export async function getDirectoryNode(path: string): Promise<DirectoryNode | nu
   return invoke('get_directory_node', { path });
 }
 
+/** Batch node lookup, aligned with `paths` (null where no node exists). */
+export async function getDirectoryNodes(paths: string[]): Promise<(DirectoryNode | null)[]> {
+  return invoke('get_directory_nodes', { paths });
+}
+
 export async function getAllDirectoryNodes(): Promise<DirectoryNode[]> {
   return invoke('get_all_directory_nodes');
 }

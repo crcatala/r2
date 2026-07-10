@@ -68,12 +68,7 @@ export interface DownloadChunk {
 }
 
 export type DownloadStatus =
-  | 'pending'
-  | 'downloading'
-  | 'paused'
-  | 'success'
-  | 'error'
-  | 'cancelled';
+  'pending' | 'downloading' | 'paused' | 'success' | 'error' | 'cancelled';
 
 export interface DownloadTask {
   id: string;
@@ -413,15 +408,25 @@ export const selectHasActiveDownloads = (state: DownloadStore) =>
   state.tasks.some((t) => t.status === 'downloading');
 
 export const selectTotalProgress = (state: DownloadStore) => {
-  const activeTasks = state.tasks.filter(
-    (t) => t.status === 'downloading' || t.status === 'success'
+  // Include queued/paused work in the denominator so the bar doesn't jump
+  // backward every time a pending file starts downloading. Failed/cancelled
+  // tasks drop out of both sums — the only (rare, justified) discontinuity.
+  const counted = state.tasks.filter(
+    (t) =>
+      t.status === 'downloading' ||
+      t.status === 'pending' ||
+      t.status === 'paused' ||
+      t.status === 'success'
   );
-  if (activeTasks.length === 0) return 0;
+  if (counted.length === 0) return 0;
 
-  const totalBytes = activeTasks.reduce((sum, t) => sum + t.fileSize, 0);
-  const downloadedBytes = activeTasks.reduce((sum, t) => sum + t.downloadedBytes, 0);
+  const totalBytes = counted.reduce((sum, t) => sum + t.fileSize, 0);
+  const downloadedBytes = counted.reduce((sum, t) => {
+    if (t.status === 'success') return sum + t.fileSize;
+    return sum + (t.fileSize > 0 ? Math.min(t.downloadedBytes, t.fileSize) : t.downloadedBytes);
+  }, 0);
 
-  return totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0;
+  return totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
 };
 
 // Selector to check if we can start more downloads

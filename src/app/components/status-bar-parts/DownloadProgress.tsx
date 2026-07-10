@@ -127,7 +127,11 @@ export default function DownloadProgress({ bucket, accountId }: DownloadProgress
     setModalOpen(true);
   };
 
-  const activeFileCount = downloadingCount + pendingCount;
+  // Files-done anchor over the same stable set as selectTotalProgress:
+  // the denominator holds still for the whole batch and the count only
+  // climbs, so the readout never appears to move backward.
+  const batchDone = tasks.filter((t) => t.status === 'success').length;
+  const batchTotal = tasks.filter((t) => t.status !== 'error' && t.status !== 'cancelled').length;
 
   return (
     <Tooltip title={tooltipContent} placement="top" styles={{ root: { maxWidth: 360 } }}>
@@ -177,8 +181,8 @@ export default function DownloadProgress({ bucket, accountId }: DownloadProgress
               />
             </span>
             <DownloadOutlined style={{ fontSize: 12 }} />
-            <Text style={{ fontSize: 12 }}>
-              {activeFileCount} file{activeFileCount !== 1 ? 's' : ''}
+            <Text style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+              {batchDone}/{batchTotal}
             </Text>
             {totalSpeed > 0 && (
               <Text type="secondary" style={{ fontSize: 12 }}>

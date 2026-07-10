@@ -1,3 +1,4 @@
+use crate::commands::batch_delete::run_batch_delete;
 use crate::commands::batch_move::{
     fallback_batch_id, run_batch_move, BatchMoveResult, MoveOperation,
 };
@@ -299,13 +300,6 @@ pub async fn delete_aws_object(
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct BatchDeleteProgress {
-    pub completed: usize,
-    pub total: usize,
-    pub failed: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct BatchDeleteResult {
     pub deleted: usize,
     pub failed: usize,
@@ -331,51 +325,30 @@ pub async fn batch_delete_aws_objects(
         });
     }
 
-    let mut completed = 0;
-    let mut failed = 0;
-    let mut errors: Vec<String> = vec![];
-    let mut deleted_keys: Vec<String> = vec![];
-
-    const BATCH_SIZE: usize = 1000;
-
-    for chunk in keys.chunks(BATCH_SIZE) {
-        let batch_keys: Vec<String> = chunk.to_vec();
-        let batch_count = batch_keys.len();
-
-        match aws::delete_objects(&aws_config, batch_keys.clone()).await {
-            Ok(_) => {
-                completed += batch_count;
-                deleted_keys.extend(batch_keys);
-            }
-            Err(e) => {
-                failed += batch_count;
-                errors.push(format!("Batch delete failed: {}", e));
-            }
+    let mut outcome = run_batch_delete(&app, keys, |batch| {
+        let cfg = aws_config.clone();
+        async move {
+            aws::delete_objects(&cfg, batch)
+                .await
+                .map(|_| ())
+                .map_err(|e| format!("Batch delete failed: {}", e))
         }
-
-        let _ = app.emit(
-            "batch-delete-progress",
-            BatchDeleteProgress {
-                completed,
-                total,
-                failed,
-            },
-        );
-    }
+    })
+    .await;
 
     // Update cache and emit events (including paths-removed if any folders became empty)
-    if !deleted_keys.is_empty() {
+    if !outcome.deleted_keys.is_empty() {
         if let Err(e) =
-            update_cache_after_batch_delete(&app, &bucket, &account_id, &deleted_keys).await
+            update_cache_after_batch_delete(&app, &bucket, &account_id, &outcome.deleted_keys).await
         {
-            errors.push(e);
+            outcome.errors.push(e);
         }
     }
 
     Ok(BatchDeleteResult {
-        deleted: completed,
-        failed,
-        errors,
+        deleted: outcome.completed,
+        failed: outcome.failed,
+        errors: outcome.errors,
     })
 }
 

@@ -252,9 +252,9 @@ pub use rustfs_buckets::{list_rustfs_buckets_by_account, save_rustfs_buckets_for
 pub use file_cache::{
     begin_sync, calculate_folder_size, clear_file_cache, delete_cached_file,
     delete_cached_files_batch, finish_sync, get_all_cached_files, get_all_directory_nodes,
-    get_bucket_summary, get_cached_file_size, get_directory_node, get_folder_contents,
-    move_cached_file, parse_key, search_cached_files, store_all_files, store_file_batch,
-    update_cached_file, upsert_prefix_files,
+    get_bucket_summary, get_cached_file_size, get_directory_node, get_directory_nodes,
+    get_folder_contents, has_full_sync, move_cached_file, parse_key, search_cached_files,
+    store_all_files, store_file_batch, update_cached_file, upsert_prefix_files,
 };
 // Re-export directory tree builder
 pub use dir_tree::{
@@ -264,9 +264,10 @@ pub use dir_tree::{
 };
 // Re-export download session functions
 pub use downloads::{
-    count_active_downloads, create_download_session, delete_all_downloads, delete_download_session,
-    delete_finished_downloads, get_download_sessions_for_bucket, get_pending_downloads,
-    pause_all_downloads, resume_all_downloads, update_download_file_size, update_download_progress,
+    count_active_downloads, create_download_session, create_download_sessions_batch,
+    delete_all_downloads, delete_download_session, delete_finished_downloads,
+    get_download_sessions_for_bucket, get_pending_downloads, pause_all_downloads,
+    resume_all_downloads, update_download_file_size, update_download_progress,
     update_download_status,
 };
 // Re-export move session functions

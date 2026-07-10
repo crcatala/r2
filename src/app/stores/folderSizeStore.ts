@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import { calculateFolderSize, getDirectoryNode, DirectoryNode } from '@/app/lib/r2cache';
+import {
+  calculateFolderSize,
+  getDirectoryNode,
+  getDirectoryNodes,
+  DirectoryNode,
+} from '@/app/lib/r2cache';
 
 type FolderSizeState = number | 'loading' | 'error';
 
@@ -18,6 +23,7 @@ interface FolderSizeStore {
 
   setSize: (key: string, size: FolderSizeState) => void;
   setMetadata: (key: string, data: FolderMetadata) => void;
+  setMetadataBatch: (entries: [string, FolderMetadata][]) => void;
 
   calculateSize: (folderKey: string) => Promise<void>;
   calculateSizes: (folderKeys: string[]) => void;
@@ -63,6 +69,19 @@ export const useFolderSizeStore = create<FolderSizeStore>((set, get) => ({
       // Also update sizes for backward compatibility
       sizes: { ...state.sizes, [key]: data.size },
     }));
+  },
+
+  setMetadataBatch: (entries) => {
+    if (entries.length === 0) return;
+    set((state) => {
+      const metadata = { ...state.metadata };
+      const sizes = { ...state.sizes };
+      for (const [key, data] of entries) {
+        metadata[key] = data;
+        sizes[key] = data.size;
+      }
+      return { metadata, sizes };
+    });
   },
 
   calculateSize: async (folderKey) => {
@@ -137,10 +156,62 @@ export const useFolderSizeStore = create<FolderSizeStore>((set, get) => ({
     }
   },
 
-  loadMetadataList: (folderKeys) => {
-    const { loadMetadata } = get();
-    for (const key of folderKeys) {
-      loadMetadata(key);
+  loadMetadataList: async (folderKeys) => {
+    const { metadata, setMetadataBatch, loadMetadata } = get();
+
+    // One IPC for the whole folder view instead of one per subfolder; a
+    // single store update also means one re-sort of the file list rather
+    // than one per resolved folder.
+    const toLoad = folderKeys.filter((key) => {
+      const existing = metadata[key];
+      return !existing || !shouldReuseFolderMetadata(key, existing);
+    });
+    if (toLoad.length === 0) return;
+
+    setMetadataBatch(
+      toLoad.map((key) => [
+        key,
+        { size: 'loading' as const, fileCount: null, totalFileCount: null, lastModified: null },
+      ])
+    );
+
+    try {
+      const nodes = await getDirectoryNodes(toLoad);
+      const resolved: [string, FolderMetadata][] = [];
+      const missing: string[] = [];
+
+      toLoad.forEach((key, i) => {
+        const node = nodes[i];
+        if (node && !isProvisionalZeroNode(key, node)) {
+          resolved.push([
+            key,
+            {
+              size: node.totalSize,
+              fileCount: node.fileCount,
+              totalFileCount: node.totalFileCount,
+              lastModified: node.lastModified,
+            },
+          ]);
+        } else {
+          missing.push(key);
+        }
+      });
+
+      setMetadataBatch(resolved);
+
+      // Folders the tree doesn't cover yet fall back to the per-folder scan
+      // path (rare: only before background indexing has run).
+      for (const key of missing) {
+        loadMetadata(key);
+      }
+    } catch (err) {
+      console.error('Failed to batch-load folder metadata:', err);
+      setMetadataBatch(
+        toLoad.map((key) => [
+          key,
+          { size: 'error' as const, fileCount: null, totalFileCount: null, lastModified: null },
+        ])
+      );
     }
   },
 

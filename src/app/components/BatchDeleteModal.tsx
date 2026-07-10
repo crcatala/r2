@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Progress, App } from 'antd';
+import { App } from 'antd';
 import { ExclamationCircleOutlined } from '@ant-design/icons';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { batchDeleteObjects, StorageConfig } from '@/app/lib/r2cache';
@@ -31,7 +31,7 @@ export default function BatchDeleteModal({
   onDeletingChange,
 }: BatchDeleteModalProps) {
   const [isDeleting, setIsDeleting] = useState(false);
-  const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  const [progress, setProgress] = useState({ completed: 0, total: 0, failed: 0 });
   const { message } = App.useApp();
 
   const selectedCount = selectedKeys.size;
@@ -47,12 +47,16 @@ export default function BatchDeleteModal({
     const total = keys.length;
 
     setIsDeleting(true);
-    setProgress({ completed: 0, total });
+    setProgress({ completed: 0, total, failed: 0 });
 
     let unlisten: UnlistenFn | undefined;
     try {
       unlisten = await listen<BatchDeleteProgress>('batch-delete-progress', (event) => {
-        setProgress({ completed: event.payload.completed, total: event.payload.total });
+        setProgress({
+          completed: event.payload.completed,
+          total: event.payload.total,
+          failed: event.payload.failed,
+        });
       });
 
       const result = await batchDeleteObjects(config, keys);
@@ -101,18 +105,25 @@ export default function BatchDeleteModal({
       footer={footer}
     >
       {isDeleting ? (
-        <div style={{ padding: '8px 0' }}>
-          <Progress percent={percent} status="active" />
-          <p
-            style={{
-              marginTop: 12,
-              textAlign: 'center',
-              fontSize: 12.5,
-              color: 'var(--text-muted)',
-            }}
+        <div className="batch-progress" role="status" aria-live="polite">
+          <div
+            className="batch-progress-track"
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
           >
-            {progress.completed} / {progress.total} files deleted
-          </p>
+            <div className="batch-progress-fill active" style={{ width: `${percent}%` }} />
+          </div>
+          <div className="batch-progress-stats">
+            <span>
+              {progress.completed.toLocaleString()} / {progress.total.toLocaleString()} deleted
+              {progress.failed > 0 && (
+                <span className="bp-failed"> · {progress.failed.toLocaleString()} failed</span>
+              )}
+            </span>
+            <span>{percent}%</span>
+          </div>
         </div>
       ) : (
         <>

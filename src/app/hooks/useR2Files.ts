@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { getAllFiles, getFolderContents, listPrefix } from '@/app/lib/r2cache';
 import { StorageConfig } from '@/app/lib/r2cache';
@@ -58,10 +58,14 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
       if (!config) return [];
 
       try {
+        // Cache-first: the backend serves straight from SQLite when the bucket
+        // is fully synced or the prefix's lazy listing is fresh, and only then
+        // pays for a network LIST. Manual refresh goes through useFilesSync's
+        // refresh(), which restarts a real background sync.
         const result = await loadFolderItems({
           config,
           prefix,
-          forceRefresh: true,
+          forceRefresh: false,
           readCachedFolder: getFolderContents,
           readAllCachedFiles: getAllFiles,
           readPrefixFolder: listPrefix,
@@ -83,6 +87,12 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
     // Enable immediately when config is ready — lazy sync handles missing cache
     enabled: isConfigReady,
     retry: 1,
+    // Cache-updated events invalidate affected folders explicitly, so a
+    // short staleTime only suppresses redundant remount/refocus refetches.
+    staleTime: 30_000,
+    // Keep the previous folder on screen while the next one resolves —
+    // navigation swaps lists instead of blanking.
+    placeholderData: keepPreviousData,
   });
 
   // Sync isFetching state to zustand store as isFolderLoading

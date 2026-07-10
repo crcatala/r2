@@ -471,3 +471,175 @@ async fn test_meta_save_and_load() {
     assert_eq!(loaded.chunks[0].status, ChunkStatus::Paused);
     assert_eq!(loaded.chunks[1].status, ChunkStatus::Pending);
 }
+
+/// Minimal raw-TCP HTTP server that truncates the FIRST ranged request
+/// starting at byte 0 (sends `truncate_at` bytes then closes the socket),
+/// and serves every other request fully. Records all Range headers so tests
+/// can assert what offset a retry resumed from. wiremock can't simulate
+/// mid-body connection aborts, hence the hand-rolled server.
+async fn spawn_truncating_server(
+    data: Vec<u8>,
+    truncate_at: usize,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let ranges: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let ranges_ret = ranges.clone();
+    let truncated_once = Arc::new(AtomicBool::new(false));
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let data = data.clone();
+            let ranges = ranges.clone();
+            let truncated_once = truncated_once.clone();
+            tokio::spawn(async move {
+                // Read request headers
+                let mut buf = vec![0u8; 8192];
+                let mut req = Vec::new();
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    req.extend_from_slice(&buf[..n]);
+                    if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&req);
+                // reqwest/hyper emit lowercase header names on the wire
+                let range = text.lines().find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("range: bytes=")
+                        .map(|s| s.trim().to_string())
+                });
+
+                let (start, end) = match &range {
+                    Some(r) => {
+                        let mut it = r.split('-');
+                        let s: usize = it.next().unwrap_or("0").parse().unwrap_or(0);
+                        let e: usize = it
+                            .next()
+                            .filter(|v| !v.is_empty())
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(data.len() - 1);
+                        (s, e.min(data.len() - 1))
+                    }
+                    None => (0, data.len() - 1),
+                };
+                if let Some(r) = &range {
+                    ranges.lock().unwrap().push(r.clone());
+                }
+
+                let slice = &data[start..=end];
+                // Truncate only the first attempt of the chunk starting at 0
+                let truncate =
+                    range.is_some() && start == 0 && !truncated_once.swap(true, Ordering::SeqCst);
+                let body: &[u8] = if truncate {
+                    &slice[..truncate_at.min(slice.len())]
+                } else {
+                    slice
+                };
+
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+                    slice.len(),
+                    start,
+                    end,
+                    data.len()
+                );
+                let _ = sock.write_all(header.as_bytes()).await;
+                let _ = sock.write_all(body).await;
+                // Dropping the socket closes it; a truncated body (fewer bytes
+                // than Content-Length) surfaces as a stream error client-side.
+            });
+        }
+    });
+
+    (format!("http://{}", addr), ranges_ret)
+}
+
+#[tokio::test]
+async fn test_chunk_retry_resumes_from_flushed_bytes() {
+    // 1 MB file split into 2 chunks of 512 KB. Chunk 0's first attempt is cut
+    // off after 96 KB (1.5 write buffers of 64 KB): 64 KB flushed at the
+    // buffer boundary + 32 KB flushed by the stream-error handler.
+    let data = test_data(1024 * 1024);
+    let truncate_at = 96 * 1024;
+    let (url, ranges) = spawn_truncating_server(data.clone(), truncate_at).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("retry_resume.bin");
+
+    let config = RangeDownloadConfig {
+        min_chunk_size: 256 * 1024,
+        max_chunks: 2,
+        write_buffer_size: 64 * 1024,
+        max_retries: 3,
+        retry_backoff_base: Duration::from_millis(10),
+        connect_timeout: Duration::from_secs(5),
+    };
+
+    let downloader = RangeDownloader::new(
+        url_provider_for(url),
+        DownloadTarget {
+            file_size: data.len() as u64,
+            destination: dest.clone(),
+        },
+        config,
+    );
+
+    let (mut rx, _control) = downloader.start().await.unwrap();
+
+    let mut completed = false;
+    let mut saw_retry = false;
+    while let Some(event) = rx.recv().await {
+        match event {
+            ChunkEvent::Complete { total_bytes, .. } => {
+                assert_eq!(total_bytes, data.len() as u64);
+                completed = true;
+                break;
+            }
+            ChunkEvent::ChunkRetry { chunk_id, .. } => {
+                assert_eq!(chunk_id, 0, "only chunk 0 should retry");
+                saw_retry = true;
+            }
+            ChunkEvent::Failed { error } => panic!("download failed: {}", error),
+            _ => {}
+        }
+    }
+
+    assert!(completed, "download should complete after the retry");
+    assert!(saw_retry, "chunk 0 should have retried");
+
+    // Byte-for-byte integrity: no hole where the truncated attempt stopped,
+    // no corruption from the resumed write.
+    let downloaded = tokio::fs::read(&dest).await.unwrap();
+    assert_eq!(downloaded, data, "file content must match exactly");
+
+    // The retry must resume from the flushed offset, not re-request the whole
+    // chunk. All 96 KB received before the abort reach disk (64 KB buffer
+    // flush + stream-error flush), so the second request for chunk 0 starts
+    // at 98304.
+    let recorded = ranges.lock().unwrap().clone();
+    let chunk0_requests: Vec<&String> =
+        recorded.iter().filter(|r| r.ends_with("-524287")).collect();
+    assert_eq!(
+        chunk0_requests.len(),
+        2,
+        "chunk 0 should be requested twice (initial + retry), got {:?}",
+        recorded
+    );
+    assert_eq!(chunk0_requests[0], "0-524287");
+    assert_eq!(
+        chunk0_requests[1], "98304-524287",
+        "retry must resume from the 96 KB already on disk instead of re-downloading the chunk"
+    );
+}

@@ -113,6 +113,48 @@ pub async fn create_download_session(session: &DownloadSession) -> DbResult<()> 
     Ok(())
 }
 
+/// Batch create download sessions in one transaction (faster for batch downloads)
+pub async fn create_download_sessions_batch(sessions: &[DownloadSession]) -> DbResult<()> {
+    if sessions.is_empty() {
+        return Ok(());
+    }
+
+    let conn = get_connection()?.lock().await;
+    conn.execute("BEGIN TRANSACTION", ()).await?;
+
+    for session in sessions {
+        if let Err(e) = conn
+            .execute(
+                "INSERT INTO download_sessions
+                 (id, object_key, file_name, file_size, downloaded_bytes, local_path,
+                  bucket, account_id, status, error, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                turso::params![
+                    session.id.clone(),
+                    session.object_key.clone(),
+                    session.file_name.clone(),
+                    session.file_size,
+                    session.downloaded_bytes,
+                    session.local_path.clone(),
+                    session.bucket.clone(),
+                    session.account_id.clone(),
+                    session.status.clone(),
+                    session.error.clone(),
+                    session.created_at,
+                    session.updated_at,
+                ],
+            )
+            .await
+        {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            return Err(e.into());
+        }
+    }
+
+    conn.execute("COMMIT", ()).await?;
+    Ok(())
+}
+
 /// Update download session progress
 pub async fn update_download_progress(session_id: &str, downloaded_bytes: i64) -> DbResult<()> {
     let conn = get_connection()?.lock().await;

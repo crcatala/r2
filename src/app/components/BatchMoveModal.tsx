@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { StorageConfig, StorageProvider } from '@/app/lib/r2cache';
 import FolderPickerModal from '@/app/components/folder/FolderPickerModal';
 import { useAccountStore } from '@/app/stores/accountStore';
+import { runRenameBatch } from '@/app/stores/renameStore';
 import Modal from '@/app/components/ui/Modal';
 
 interface DestinationBucket {
@@ -198,6 +199,30 @@ export default function BatchMoveModal({
       key: 'batch-move',
     });
 
+    // Moves within the same bucket don't need the 5-wide streaming pipeline
+    // (download → re-upload → delete): the server-side copy+delete executor
+    // used by folder rename does them 6-12 wide with a single batched cache
+    // update. The dock tracks the batch and the file list refreshes when it
+    // finishes.
+    if (isSameDestination && deleteOriginal) {
+      const { done } = runRenameBatch(
+        config,
+        operations.map((op) => ({ old_key: op.source_key, new_key: op.dest_key })),
+        `Move ${operations.length} item${operations.length > 1 ? 's' : ''}`
+      );
+      // Failures surface in the dock via the store; keep the rejection from
+      // bubbling as an unhandled promise.
+      done.catch(() => {});
+      message.success({
+        content: `Moving ${operations.length} file${operations.length > 1 ? 's' : ''} in background`,
+        key: 'batch-move',
+      });
+      setIsStartingQueue(false);
+      onClose();
+      onSuccess();
+      return;
+    }
+
     try {
       await invoke('start_batch_move', {
         sourceConfig: {
@@ -250,6 +275,7 @@ export default function BatchMoveModal({
     selectedDestination,
     selectedBucket,
     deleteOriginal,
+    isSameDestination,
     isStartingQueue,
     message,
     onClose,

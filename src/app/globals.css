@@ -4554,6 +4554,9 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   flex: 1;
   font-family: var(--font-mono);
   font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding-right: 4px;
   color: var(--text-subtle);
 }
 .dock-close {
@@ -4760,6 +4763,68 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 }
 .dock-task.paused .dock-task-fill {
   opacity: 0.45;
+}
+
+/* Batch-operation progress (delete modal) — same strip + mono-telemetry
+   language as the dock; delete's lane hue is the app's danger red. */
+.batch-progress {
+  --bp: #d4493a;
+  padding: 4px 0 2px;
+}
+.batch-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.batch-progress-fill {
+  position: relative;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--bp);
+  transition: width 300ms ease;
+  overflow: hidden;
+}
+.batch-progress-fill.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  animation: dockSheen 1.6s ease-in-out infinite;
+}
+.batch-progress-stats {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.batch-progress-stats .bp-failed {
+  color: #d4493a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-task-fill,
+  .dock-overall-fill,
+  .dock-ring-fill,
+  .batch-progress-fill {
+    transition: none;
+  }
+  .dock-task-fill.active::after,
+  .dock-overall-fill.active::after,
+  .batch-progress-fill.active::after {
+    animation: none;
+    content: none;
+  }
+  .dock-task.done {
+    animation: none;
+  }
 }
 
 /* Mono stats line under each lane */

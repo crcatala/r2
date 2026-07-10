@@ -7,12 +7,15 @@
 use crate::db::{self, DownloadSession};
 use crate::providers::{aws, minio, rustfs};
 use crate::r2::R2Config;
-use crate::transfer_progress::SpeedWindow;
+use crate::transfer_progress::{SpeedWindow, ThrottleGate};
 use reqwest::Client;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -36,10 +39,22 @@ const WRITE_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 const DOWNLOAD_CANCELLED_ERROR: &str = "Download cancelled";
 const DOWNLOAD_PAUSED_ERROR: &str = "Download paused";
 
+/// Progress events flow to the UI at most this often per task; the frontend
+/// batcher coalesces at 200ms, so anything faster is wasted IPC.
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(150);
+/// Progress persists to SQLite at most this often per task. Every DB call
+/// serializes on the global connection mutex, so hot-loop writes throttle
+/// the transfer itself.
+const PROGRESS_DB_INTERVAL: Duration = Duration::from_millis(500);
+
 // Global cancel/pause registry for downloads
 lazy_static::lazy_static! {
     pub(crate) static ref DOWNLOAD_CANCEL_REGISTRY: Mutex<HashMap<String, Arc<AtomicBool>>> = Mutex::new(HashMap::new());
     pub(crate) static ref DOWNLOAD_PAUSE_REGISTRY: Mutex<HashMap<String, Arc<AtomicBool>>> = Mutex::new(HashMap::new());
+    /// Serializes pending-session claiming so concurrent refills (worker
+    /// completions racing the frontend's start_download_queue call) can't
+    /// start the same session twice.
+    static ref DOWNLOAD_QUEUE_LOCK: Mutex<()> = Mutex::new(());
 }
 
 /// Download a single file with streaming and progress (internal)
@@ -137,6 +152,8 @@ pub(crate) async fn download_file_internal(
     // reported rate covers only bytes from this session.
     let downloaded_bytes = Arc::new(AtomicU64::new(existing_bytes));
     let speed_window = SpeedWindow::with_baseline(existing_bytes);
+    let emit_gate = ThrottleGate::new(PROGRESS_EMIT_INTERVAL);
+    let db_gate = ThrottleGate::new(PROGRESS_DB_INTERVAL);
 
     // Emit initial progress event to show download has started
     let initial_percent = if total_bytes > 0 {
@@ -243,31 +260,40 @@ pub(crate) async fn download_file_internal(
             // Get current downloaded bytes for accurate progress
             let current_downloaded = downloaded_bytes.load(Ordering::SeqCst);
 
-            // Calculate percent (ensure it's within 0-100)
-            let percent = if total_bytes > 0 {
-                std::cmp::min(
-                    ((current_downloaded as f64 / total_bytes as f64) * 100.0) as u32,
-                    100,
-                )
-            } else {
-                0
-            };
+            // Rate-limit event emission: on fast links buffer flushes fire far
+            // more often than the UI can render, and every emit crosses the
+            // IPC bridge. The final 100% emit below is unconditional.
+            if emit_gate.try_pass() {
+                // Calculate percent (ensure it's within 0-100)
+                let percent = if total_bytes > 0 {
+                    std::cmp::min(
+                        ((current_downloaded as f64 / total_bytes as f64) * 100.0) as u32,
+                        100,
+                    )
+                } else {
+                    0
+                };
 
-            let speed = speed_window.sample(current_downloaded);
+                let speed = speed_window.sample(current_downloaded);
 
-            let _ = app.emit(
-                "download-progress",
-                DownloadProgress {
-                    task_id: task_id.to_string(),
-                    percent,
-                    downloaded_bytes: current_downloaded,
-                    total_bytes,
-                    speed,
-                },
-            );
+                let _ = app.emit(
+                    "download-progress",
+                    DownloadProgress {
+                        task_id: task_id.to_string(),
+                        percent,
+                        downloaded_bytes: current_downloaded,
+                        total_bytes,
+                        speed,
+                    },
+                );
+            }
 
-            // Update progress in DB on each buffer flush
-            let _ = db::update_download_progress(task_id, current_downloaded as i64).await;
+            // Persist progress at a coarser cadence — the DB shares one global
+            // connection mutex, so per-flush writes stall this and other tasks.
+            // Pause/completion paths persist the exact final value.
+            if db_gate.try_pass() {
+                let _ = db::update_download_progress(task_id, current_downloaded as i64).await;
+            }
         }
     }
 
@@ -377,6 +403,7 @@ pub(crate) async fn download_file_chunked(
     let (mut rx, control) = downloader.start().await?;
 
     let task_id_owned = task_id.to_string();
+    let db_gate = ThrottleGate::new(PROGRESS_DB_INTERVAL);
 
     // Register cancel/pause control in the registries so commands.rs can signal them
     {
@@ -473,9 +500,13 @@ pub(crate) async fn download_file_chunked(
                     },
                 );
 
-                // Periodic DB progress update (the engine handles throttling to 200ms)
-                let _ =
-                    db::update_download_progress(&task_id_owned, aggregate_downloaded as i64).await;
+                // Persist at a coarser cadence than the engine's 200ms event tick;
+                // the completion path persists the exact final value.
+                if db_gate.try_pass() {
+                    let _ =
+                        db::update_download_progress(&task_id_owned, aggregate_downloaded as i64)
+                            .await;
+                }
             }
             ChunkEvent::ChunkComplete { chunk_id } => {
                 log::info!("Download {}: chunk {} completed", task_id_owned, chunk_id);
@@ -654,6 +685,37 @@ fn format_speed(bytes_per_sec: f64) -> String {
     }
 }
 
+/// Spawn a worker task for one session. Plain fn + boxed future so the
+/// worker → queue-refill → worker recursion has an indirection point.
+pub(crate) fn spawn_download_worker(
+    app: AppHandle,
+    session: DownloadSession,
+    config: DownloadConfig,
+) {
+    let fut: Pin<Box<dyn Future<Output = ()> + Send>> =
+        Box::pin(spawn_download_task(app, session, config));
+    tokio::spawn(fut);
+}
+
+/// Claim pending sessions up to the concurrency limit (serialized against
+/// concurrent claimers) and spawn a worker for each. Returns how many started.
+pub(crate) async fn claim_and_spawn_pending(
+    app: &AppHandle,
+    config: &DownloadConfig,
+    bucket: &str,
+    account_id: &str,
+) -> Result<i64, String> {
+    let sessions = {
+        let _guard = DOWNLOAD_QUEUE_LOCK.lock().await;
+        get_pending_sessions_to_start(app, bucket, account_id).await?
+    };
+    let started = sessions.len() as i64;
+    for session in sessions {
+        spawn_download_worker(app.clone(), session, config.clone());
+    }
+    Ok(started)
+}
+
 /// Spawn a download task.
 /// Dispatches to chunked parallel download for files >= 10MB,
 /// or single-stream download for smaller files.
@@ -737,6 +799,7 @@ pub(crate) async fn spawn_download_task(
     };
 
     // Handle errors (both paths)
+    let paused = matches!(&result, Err(e) if e == DOWNLOAD_PAUSED_ERROR);
     if let Err(e) = result {
         if e != DOWNLOAD_PAUSED_ERROR && e != DOWNLOAD_CANCELLED_ERROR {
             let _ = db::update_download_status(&task_id, "failed", Some(&e)).await;
@@ -749,6 +812,14 @@ pub(crate) async fn spawn_download_task(
                 },
             );
         }
+    }
+
+    // Backend-driven queue refill: start the next pending session immediately
+    // instead of waiting for the frontend to observe the terminal event and
+    // round-trip a start_download_queue call. Skipped on pause — pausing one
+    // task must not pull new work into its slot.
+    if !paused {
+        let _ = claim_and_spawn_pending(&app, &config, &session.bucket, &session.account_id).await;
     }
 }
 

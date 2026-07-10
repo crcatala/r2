@@ -58,6 +58,33 @@ pub async fn set_prefix_sync_time(
     Ok(())
 }
 
+/// Re-stamp prefixes that were already lazily listed, marking them fresh.
+///
+/// Used after incremental cache mutations (e.g. batch delete): the cached
+/// listing was just updated to match the remote, so it is as fresh as a new
+/// LIST. UPDATE-only on purpose — creating rows for never-listed prefixes
+/// would falsely claim an empty cache is a complete listing.
+pub async fn touch_prefix_sync_times_if_exists(
+    bucket: &str,
+    account_id: &str,
+    prefixes: &[String],
+) -> DbResult<()> {
+    if prefixes.is_empty() {
+        return Ok(());
+    }
+    let now = chrono::Utc::now().timestamp();
+    let conn = get_connection()?.lock().await;
+    for prefix in prefixes {
+        conn.execute(
+            "UPDATE prefix_sync_times SET last_synced_at = ?4
+             WHERE bucket = ?1 AND account_id = ?2 AND prefix = ?3",
+            turso::params![bucket, account_id, prefix.clone(), now],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Clear all prefix sync times for a bucket (used when switching accounts or full re-sync).
 #[allow(dead_code)]
 pub async fn clear_prefix_sync_times(bucket: &str, account_id: &str) -> DbResult<()> {

@@ -13,6 +13,9 @@ bun install              # Install dependencies
 bun run dev              # Next.js dev server (port 3000, turbopack)
 bun run tauri dev        # Full Tauri desktop app in dev mode
 bun run tauri build      # Production build
+bun run check            # format:check + typecheck + bun test — the frontend CI gate
+bun test                 # Frontend unit tests (Bun's runner; no vitest/jest)
+bun run typecheck        # tsc --noEmit
 bun run format           # Prettier format all files
 bun run format:check     # Check formatting
 ```
@@ -22,7 +25,16 @@ Rust backend (from `src-tauri/`):
 ```bash
 cargo build              # Build Rust backend only
 cargo check              # Type-check Rust code
+cargo test --workspace   # Rust tests (root crate + crates/range-dl)
+cargo fmt --all --check                                # CI gate
+cargo clippy --workspace --all-targets -- -D warnings  # CI gate
 ```
+
+## CI & Releases
+
+- CI (`.github/workflows/ci.yml`) runs all the gate commands above plus `bun run build` and `bun tauri build` on a 4-platform matrix (macOS arm64/x64, Windows, Linux) — run the gates locally before pushing
+- Release: `./publish.sh <patch|minor|major|x.y.z>` (requires a clean tree) bumps versions in `package.json`, `src-tauri/tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, commits, tags `v*`, and pushes; `release.yml` then builds and drafts the GitHub release — the `/r2-release` skill guides the full flow
+- Gotcha: `bun install` and builds churn `bun.lock`, `Cargo.lock`, and `package.json` — revert unintended churn before committing
 
 ## Architecture
 
@@ -35,9 +47,10 @@ cargo check              # Type-check Rust code
 
 Key directories:
 
-- `stores/` — Zustand stores: `accountStore`, `syncStore`, `uploadStore`, `downloadStore`, `moveStore`, `batchOperationStore`, `currentPathStore`, `themeStore`, `folderSizeStore`
-- `hooks/` — `useFilesSync.ts` (sync orchestration), `useR2Files.ts` (cached file listing)
+- `stores/` — Zustand stores: `accountStore`, `syncStore`, `uploadStore`, `downloadStore`, `moveStore`, `batchOperationStore`, `currentPathStore`, `themeStore`, `folderSizeStore`, `previewStore`, `renameStore`, `toastStore`
+- `hooks/` — `useFilesSync.ts` (sync orchestration), `useR2Files.ts` (cached file listing), `useLazySync.ts` + `useBackgroundSync.ts` (sync pipeline)
 - `lib/` — `r2cache.ts` (routes sync to provider adapters)
+- `providers/` — per-provider frontend sync adapters (`r2/`, `aws/`, `minio/`, `rustfs/`); distinct from `providers.tsx` (React context providers)
 - `components/` — Feature-specific modals and views (ConfigModal, BatchMoveModal, FilePreviewModal, etc.)
 - `utils/` — Helpers (`formatBytes`, `fileIcon`)
 
@@ -46,10 +59,11 @@ Key directories:
 - **Framework**: Tauri v2 with Rust
 - **Entry**: `main.rs` → `lib.rs` (plugin registration, IPC commands, window management)
 - **Database**: SQLite via Turso (`turso` crate). Schema/queries in `db/`
-- **Provider commands**: `commands/r2_commands.rs`, `commands/aws_commands.rs`, `commands/minio_commands.rs`, `commands/rustfs_commands.rs`
-- **S3 client**: `providers/s3_client.rs` — shared AWS SDK S3 client factory, provider-specific adapters in `providers/aws/`, `providers/minio/`, `providers/rustfs.rs`
-- **File operations**: `upload.rs`, `download/`, `move_transfer/`
-- **DB modules**: `db/accounts.rs`, `db/tokens.rs`, `db/buckets.rs`, `db/file_cache.rs`, `db/dir_tree.rs`, `db/downloads.rs`, `db/move_sessions.rs`
+- **Provider commands**: `commands/{r2,aws,minio,rustfs}_commands.rs`, plus `commands/batch_move.rs`, `commands/lazy_sync.rs`, `commands/file_cache.rs` and cache-maintenance modules
+- **S3 client**: `providers/s3_client.rs` — shared AWS SDK S3 client factory; provider adapters in `providers/aws/`, `providers/minio/`, `providers/rustfs.rs`. The R2 adapter is NOT under `providers/` — it lives at top-level `src-tauri/src/r2/`
+- **File operations**: `upload.rs`, `download/`, `move_transfer/`, `transfer_progress.rs`
+- **Workspace crate**: `crates/range-dl/` — multi-threaded ranged download engine; the reason cargo commands need `--workspace`
+- **DB modules**: `db/` — per-provider account/bucket modules (`aws_accounts.rs`, `minio_buckets.rs`, …) following the provider pattern, plus `file_cache.rs`, `dir_tree.rs`, `downloads.rs`, `move_sessions.rs`, `tokens.rs`, `prefix_sync.rs`, `sessions.rs`, `app_state.rs`
 
 ### Sync Pipeline
 
@@ -65,7 +79,6 @@ The sync system caches bucket contents locally in SQLite for fast browsing:
 - Tauri IPC via `#[tauri::command]` (Rust) and `@tauri-apps/api` (TypeScript)
 - HTTP requests use `@tauri-apps/plugin-http`
 - Tauri features are conditionally loaded (check `window.__TAURI__`)
-- API responses use `{ code: 1 }` for success
 
 ### Debugging with tauri-connector
 
@@ -89,3 +102,7 @@ tauri-connector state        # App metadata
 - **Antd message API**: Always use `const { message } = App.useApp()` — never `import { message } from 'antd'`
 - **Provider pattern**: Each storage provider (R2, AWS, MinIO, RustFS) has parallel command, DB, and provider modules — keep them consistent when adding features
 - **Accounts are scoped**: Sync data and file cache are per-account + per-bucket, never mixed across accounts
+- **Tests**: colocated `*.test.ts` files run by `bun test` (Bun's built-in runner — don't add vitest/jest); Rust tests are inline `#[cfg(test)]` plus `crates/range-dl/tests/`
+- **Static export outputs to `dist/`** (`distDir` in next.config.ts); Tauri consumes `../dist` — there is no `out/`
+- **`src-tauri/capabilities/connector.json` is generated** by build.rs under the connector feature and gitignored — never hand-edit
+- **AGENTS.md**: gitignored near-copy of this file for Codex — mirror CLAUDE.md edits into it

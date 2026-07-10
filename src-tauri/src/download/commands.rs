@@ -9,8 +9,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::types::{DownloadBatchOperation, DownloadStatusChanged, DownloadTaskDeleted};
 use super::worker::{
-    get_pending_sessions_to_start, spawn_download_task, DownloadConfig, DOWNLOAD_CANCEL_REGISTRY,
-    DOWNLOAD_PAUSE_REGISTRY,
+    claim_and_spawn_pending, DownloadConfig, DOWNLOAD_CANCEL_REGISTRY, DOWNLOAD_PAUSE_REGISTRY,
 };
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +131,61 @@ pub async fn create_download_task(
         .map_err(|e| format!("Failed to create download session: {}", e))
 }
 
+/// One file in a batch download request.
+#[derive(Debug, Deserialize)]
+pub struct DownloadTaskInput {
+    pub task_id: String,
+    pub object_key: String,
+    pub file_name: String,
+    pub file_size: i64,
+}
+
+/// Create many download sessions in one IPC call + one DB transaction.
+/// Returns the created sessions (with cache-resolved file sizes) so the
+/// frontend can seed its store without a follow-up query.
+#[tauri::command]
+pub async fn create_download_tasks(
+    tasks: Vec<DownloadTaskInput>,
+    local_path: String,
+    bucket: String,
+    account_id: String,
+) -> Result<Vec<DownloadSession>, String> {
+    let now = Utc::now().timestamp();
+    let mut sessions = Vec::with_capacity(tasks.len());
+
+    for task in tasks {
+        // Resolve unknown sizes from the file cache (rare — listings carry sizes)
+        let file_size = if task.file_size == 0 {
+            db::get_cached_file_size(&bucket, &account_id, &task.object_key)
+                .await
+                .unwrap_or(0)
+        } else {
+            task.file_size
+        };
+
+        sessions.push(DownloadSession {
+            id: task.task_id,
+            object_key: task.object_key,
+            file_name: task.file_name,
+            file_size,
+            downloaded_bytes: 0,
+            local_path: local_path.clone(),
+            bucket: bucket.clone(),
+            account_id: account_id.clone(),
+            status: "pending".to_string(),
+            error: None,
+            created_at: now,
+            updated_at: now,
+        });
+    }
+
+    db::create_download_sessions_batch(&sessions)
+        .await
+        .map_err(|e| format!("Failed to create download sessions: {}", e))?;
+
+    Ok(sessions)
+}
+
 /// Process the download queue - start pending downloads up to MAX_CONCURRENT_DOWNLOADS
 #[tauri::command]
 pub async fn start_download_queue(
@@ -140,20 +194,9 @@ pub async fn start_download_queue(
 ) -> Result<i64, String> {
     let download_config = build_download_config(&config)?;
 
-    // Get sessions to start (this updates their status in DB and emits events)
-    let sessions = get_pending_sessions_to_start(&app, &config.bucket, &config.account_id).await?;
-    let started_count = sessions.len() as i64;
-
-    // Spawn download tasks for each session
-    for session in sessions {
-        let app_clone = app.clone();
-        let config_clone = download_config.clone();
-        tokio::spawn(async move {
-            spawn_download_task(app_clone, session, config_clone).await;
-        });
-    }
-
-    Ok(started_count)
+    // Claim + spawn under the queue lock so this call can't double-start
+    // sessions against a concurrent backend-driven refill.
+    claim_and_spawn_pending(&app, &download_config, &config.bucket, &config.account_id).await
 }
 
 /// Start all paused downloads
@@ -177,17 +220,9 @@ pub async fn start_all_downloads(
         },
     );
 
-    // Then get sessions to start and spawn tasks
+    // Then claim + spawn under the queue lock
     let download_config = build_download_config(&config)?;
-    let sessions = get_pending_sessions_to_start(&app, &config.bucket, &config.account_id).await?;
-
-    for session in sessions {
-        let app_clone = app.clone();
-        let config_clone = download_config.clone();
-        tokio::spawn(async move {
-            spawn_download_task(app_clone, session, config_clone).await;
-        });
-    }
+    claim_and_spawn_pending(&app, &download_config, &config.bucket, &config.account_id).await?;
 
     Ok(resumed_count)
 }

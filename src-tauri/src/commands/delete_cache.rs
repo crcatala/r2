@@ -52,12 +52,19 @@ pub(crate) async fn update_cache_after_delete(
         }
     }
 
+    // The cached listing now matches the remote; re-stamp already-listed
+    // parents so lazy-browsed folders keep serving from cache instead of
+    // re-LISTing right after the delete.
+    let affected_paths = get_unique_parent_paths(&[key.to_string()]);
+    let _ = db::prefix_sync::touch_prefix_sync_times_if_exists(bucket, account_id, &affected_paths)
+        .await;
+
     // Emit cache-updated event
     let _ = app.emit(
         "cache-updated",
         CacheUpdatedEvent {
             action: "delete".to_string(),
-            affected_paths: get_unique_parent_paths(&[key.to_string()]),
+            affected_paths,
         },
     );
 
@@ -110,12 +117,17 @@ pub(crate) async fn update_cache_after_batch_delete(
         );
     }
 
+    // Re-stamp already-listed parents (cache now matches remote for them)
+    let affected_paths = get_unique_parent_paths(deleted_keys);
+    let _ = db::prefix_sync::touch_prefix_sync_times_if_exists(bucket, account_id, &affected_paths)
+        .await;
+
     // Emit cache-updated event
     let _ = app.emit(
         "cache-updated",
         CacheUpdatedEvent {
             action: "delete".to_string(),
-            affected_paths: get_unique_parent_paths(deleted_keys),
+            affected_paths,
         },
     );
 

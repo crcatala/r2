@@ -27,7 +27,12 @@ pub(crate) enum ChunkResult {
 
 /// Shared progress counter for a chunk (read by the progress aggregator).
 pub(crate) struct ChunkTracker {
+    /// Bytes received from the network (may be ahead of disk by one write buffer).
     pub downloaded_bytes: Arc<AtomicU64>,
+    /// Bytes durably written to disk. Restarts (retry/stall) MUST resume from
+    /// this value — resuming from `downloaded_bytes` could leave an unwritten
+    /// gap in the file if the buffered tail never reached disk.
+    pub flushed_bytes: Arc<AtomicU64>,
     pub speed: Arc<AtomicU64>, // stored as f64 bits via to_bits/from_bits
 }
 
@@ -35,12 +40,17 @@ impl ChunkTracker {
     pub fn new(initial_bytes: u64) -> Self {
         Self {
             downloaded_bytes: Arc::new(AtomicU64::new(initial_bytes)),
+            flushed_bytes: Arc::new(AtomicU64::new(initial_bytes)),
             speed: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn get_downloaded(&self) -> u64 {
         self.downloaded_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn get_flushed(&self) -> u64 {
+        self.flushed_bytes.load(Ordering::Relaxed)
     }
 
     pub fn get_speed(&self) -> f64 {
@@ -167,6 +177,7 @@ pub(crate) async fn download_chunk(request: ChunkDownloadRequest<'_>) -> ChunkRe
                         write_buffer.clear();
                     }
                     let _ = file.flush().await;
+                    tracker.flushed_bytes.store(bytes_written, Ordering::Relaxed);
 
                     return ChunkResult::Paused {
                         state: ChunkState {
@@ -218,12 +229,14 @@ pub(crate) async fn download_chunk(request: ChunkDownloadRequest<'_>) -> ChunkRe
                                 };
                             }
                             write_buffer.clear();
+                            tracker.flushed_bytes.store(bytes_written, Ordering::Relaxed);
                         }
                     }
                     Some(Err(e)) => {
-                        // Flush what we have so far (for resume)
-                        if !write_buffer.is_empty() {
-                            let _ = file.write_all(&write_buffer).await;
+                        // Flush what we have so far (for resume). Only advance the
+                        // flushed counter when the write actually succeeded.
+                        if write_buffer.is_empty() || file.write_all(&write_buffer).await.is_ok() {
+                            tracker.flushed_bytes.store(bytes_written, Ordering::Relaxed);
                         }
                         let err = e.to_string();
                         return ChunkResult::Failed {
@@ -251,6 +264,22 @@ pub(crate) async fn download_chunk(request: ChunkDownloadRequest<'_>) -> ChunkRe
                         }
 
                         tracker.downloaded_bytes.store(bytes_written, Ordering::Relaxed);
+                        tracker.flushed_bytes.store(bytes_written, Ordering::Relaxed);
+
+                        // A server can end the body early without a transport
+                        // error. Treating a short read as success would finalize
+                        // a file with a hole — fail so the retry path resumes
+                        // from the flushed offset.
+                        let expected = state.total_bytes();
+                        if bytes_written < expected {
+                            return ChunkResult::Failed {
+                                kind: ErrorKind::Network,
+                                error: format!(
+                                    "Stream ended early: got {} of {} bytes",
+                                    bytes_written, expected
+                                ),
+                            };
+                        }
                         return ChunkResult::Complete { bytes_written };
                     }
                 }

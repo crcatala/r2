@@ -553,6 +553,16 @@ async fn orchestrate(
                                 }
                             }
 
+                            // Resume from the bytes that reached disk instead of
+                            // re-downloading the whole range. A fresh tracker seeded
+                            // at the flushed offset keeps reported progress honest
+                            // (small dip ≤ one write buffer instead of a full-chunk
+                            // reset to zero).
+                            let flushed = chunks[idx].tracker.get_flushed();
+                            chunks[idx].state.downloaded_bytes = flushed;
+                            chunks[idx].tracker = ChunkTracker::new(flushed);
+                            chunks[idx].last_progress = flushed;
+
                             // Re-spawn
                             spawn_chunk(
                                 idx, &client, &chunks[idx], &part_path, &config,
@@ -629,8 +639,15 @@ async fn orchestrate(
                                 chunk.state.chunk_id, current
                             );
 
-                            // Update chunk state with current progress for resume
-                            chunk.state.downloaded_bytes = current;
+                            // Resume from bytes durably on disk, NOT bytes received:
+                            // the hung task may hold up to a full write buffer that
+                            // never reached the file — resuming past it would leave
+                            // a hole in the .part file.
+                            let flushed = chunk.tracker.get_flushed();
+                            chunk.state.downloaded_bytes = flushed;
+                            // Fresh tracker so the orphaned task's late writes to the
+                            // old Arcs can't clobber the new attempt's counters.
+                            chunk.tracker = ChunkTracker::new(flushed);
                             chunk.retry_count = chunk.retry_count.saturating_add(1);
                             chunk.generation += 1; // Bump generation so old task's result is ignored
 
@@ -652,12 +669,16 @@ async fn orchestrate(
                             );
                             // active_count stays the same — replacing, not adding
                             chunk.stall_count = 0;
+                            chunk.last_progress = flushed;
 
                             let _ = event_tx.send(ChunkEvent::ChunkRetry {
                                 chunk_id: chunk.state.chunk_id,
                                 attempt: chunk.retry_count,
                                 error: "Stall detected — restarting chunk".to_string(),
                             }).await;
+                            // Skip the tail update: last_progress must track the
+                            // fresh tracker's baseline, not the stale received count.
+                            continue;
                         }
                     } else {
                         chunk.stall_count = 0;
@@ -711,6 +732,7 @@ fn spawn_chunk(
     let path = part_path.to_path_buf();
     let cfg = config.clone();
     let downloaded = chunk.tracker.downloaded_bytes.clone();
+    let flushed = chunk.tracker.flushed_bytes.clone();
     let speed = chunk.tracker.speed.clone();
     let cancel = cancel.clone();
     let pause = pause_rx.clone();
@@ -719,6 +741,7 @@ fn spawn_chunk(
 
     let tracker = ChunkTracker {
         downloaded_bytes: downloaded,
+        flushed_bytes: flushed,
         speed,
     };
 

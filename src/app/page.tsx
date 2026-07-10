@@ -41,7 +41,11 @@ import { useFolderSizeStore } from '@/app/stores/folderSizeStore';
 import { useCurrentPathStore } from '@/app/stores/currentPathStore';
 import { useSyncStore } from '@/app/stores/syncStore';
 import { useBatchOperationStore } from '@/app/stores/batchOperationStore';
-import { setupGlobalDownloadListeners, useDownloadStore } from '@/app/stores/downloadStore';
+import {
+  setupGlobalDownloadListeners,
+  useDownloadStore,
+  type DownloadSession,
+} from '@/app/stores/downloadStore';
 import { setupGlobalRenameListeners, useRenameStore } from '@/app/stores/renameStore';
 import { useKeyboardShortcuts } from '@/app/hooks/useKeyboardShortcuts';
 import { useGlobalShortcuts } from '@/app/hooks/useGlobalShortcuts';
@@ -125,6 +129,7 @@ export default function Home() {
 
   // Download store
   const addDownloadTask = useDownloadStore((state) => state.addTask);
+  const addDownloadTasks = useDownloadStore((state) => state.addTasks);
   const loadDownloadsFromDatabase = useDownloadStore((state) => state.loadFromDatabase);
 
   const [searchTotalCount, setSearchTotalCount] = useState(0);
@@ -603,14 +608,13 @@ export default function Home() {
       try {
         await deleteObject(config, item.key);
         message.success(`Deleted "${item.name}"`);
-        await refreshSync();
         await refresh();
       } catch (e) {
         console.error('Delete error:', e);
         message.error(`Failed to delete: ${e instanceof Error ? e.message : 'Unknown error'}`);
       }
     },
-    [config, message, refresh, refreshSync]
+    [config, message, refresh]
   );
 
   const handleFolderDelete = useCallback(
@@ -659,35 +663,29 @@ export default function Home() {
         const folder = await invoke<string | null>('select_download_folder');
         if (!folder) return; // User cancelled
 
-        // Queue all files for download
-        for (const obj of objects) {
-          const fileName = obj.key.split('/').pop() || obj.key;
-          const fileSize = obj.size || 0;
-          const taskId = `download-${Date.now()}-${obj.key}`;
-
-          try {
-            await invoke('create_download_task', {
-              taskId,
-              objectKey: obj.key,
-              fileName,
-              fileSize,
-              localPath: folder,
-              bucket: config.bucket,
-              accountId: config.accountId,
-            });
-          } catch (e) {
-            console.error('Failed to create download task:', e);
-            continue;
-          }
-
-          addDownloadTask({
-            id: taskId,
-            key: obj.key,
-            fileName,
-            fileSize,
-            localPath: folder,
-          });
-        }
+        // Queue all files in one backend call: single IPC round trip + one
+        // DB transaction instead of one of each per file.
+        const stamp = Date.now();
+        const sessions = await invoke<DownloadSession[]>('create_download_tasks', {
+          tasks: objects.map((obj) => ({
+            task_id: `download-${stamp}-${obj.key}`,
+            object_key: obj.key,
+            file_name: obj.key.split('/').pop() || obj.key,
+            file_size: obj.size || 0,
+          })),
+          localPath: folder,
+          bucket: config.bucket,
+          accountId: config.accountId,
+        });
+        addDownloadTasks(
+          sessions.map((s) => ({
+            id: s.id,
+            key: s.object_key,
+            fileName: s.file_name,
+            fileSize: s.file_size,
+            localPath: s.local_path,
+          }))
+        );
 
         // Start download queue via Rust backend
         setTimeout(() => startDownloadQueue(), 50);
@@ -701,7 +699,7 @@ export default function Home() {
         );
       }
     },
-    [config, isConfigReady, message, addDownloadTask, startDownloadQueue]
+    [config, isConfigReady, message, addDownloadTasks, startDownloadQueue]
   );
 
   const openBatchDeleteConfirm = useCallback(async () => {
@@ -728,10 +726,14 @@ export default function Home() {
     openDeleteModal(finalKeys);
   }, [selectedKeys, expandFolderKeys, message, openDeleteModal]);
 
+  // Batch ops update the local cache incrementally (backend cache-updated /
+  // paths-removed events), so completion only needs a cheap cache-backed
+  // refetch — restarting a full bucket sync here made every batch op pay a
+  // whole-bucket LIST walk.
   const handleBatchDeleteSuccess = useCallback(async () => {
     clearSelection();
-    await Promise.all([refresh(), refreshSync()]);
-  }, [refresh, refreshSync, clearSelection]);
+    await refresh();
+  }, [refresh, clearSelection]);
 
   const openBatchMoveModalHandler = useCallback(async () => {
     if (selectedKeys.size === 0) return;
@@ -759,8 +761,8 @@ export default function Home() {
 
   const handleBatchMoveSuccess = useCallback(async () => {
     clearSelection();
-    await Promise.all([refresh(), refreshSync()]);
-  }, [refresh, refreshSync, clearSelection]);
+    await refresh();
+  }, [refresh, clearSelection]);
 
   const handleRenameClick = useCallback((item: FileItem) => {
     setRenameFile(item);
@@ -848,37 +850,30 @@ export default function Home() {
       const folder = await invoke<string | null>('select_download_folder');
       if (!folder) return; // User cancelled
 
-      // Add tasks to download store (as pending)
-      // Rust backend will look up file sizes from cache when fileSize is 0
-      for (const key of filesToDownload) {
-        const fileName = key.split('/').pop() || key;
-        const fileSize = filteredItems.find((item) => item.key === key)?.size ?? 0;
-        const taskId = `download-${Date.now()}-${key}`;
-
-        // Create task in database first (Rust looks up file size from cache if 0)
-        try {
-          await invoke('create_download_task', {
-            taskId,
-            objectKey: key,
-            fileName,
-            fileSize,
-            localPath: folder,
-            bucket: config.bucket,
-            accountId: config.accountId,
-          });
-        } catch (e) {
-          console.error('Failed to create download task:', e);
-          continue;
-        }
-
-        addDownloadTask({
-          id: taskId,
-          key,
-          fileName,
-          fileSize,
-          localPath: folder,
-        });
-      }
+      // Queue all files in one backend call (single IPC + one DB transaction).
+      // Rust looks up file sizes from cache when file_size is 0.
+      const sizeByKey = new Map(filteredItems.map((item) => [item.key, item.size ?? 0]));
+      const stamp = Date.now();
+      const sessions = await invoke<DownloadSession[]>('create_download_tasks', {
+        tasks: filesToDownload.map((key) => ({
+          task_id: `download-${stamp}-${key}`,
+          object_key: key,
+          file_name: key.split('/').pop() || key,
+          file_size: sizeByKey.get(key) ?? 0,
+        })),
+        localPath: folder,
+        bucket: config.bucket,
+        accountId: config.accountId,
+      });
+      addDownloadTasks(
+        sessions.map((s) => ({
+          id: s.id,
+          key: s.object_key,
+          fileName: s.file_name,
+          fileSize: s.file_size,
+          localPath: s.local_path,
+        }))
+      );
 
       // Start download queue via Rust backend
       setTimeout(() => startDownloadQueue(), 50);
@@ -897,7 +892,7 @@ export default function Home() {
     message,
     expandFolderKeys,
     filteredItems,
-    addDownloadTask,
+    addDownloadTasks,
     startDownloadQueue,
   ]);
 
@@ -973,20 +968,20 @@ export default function Home() {
     if (previewFile?.key === renameFile?.key) {
       closePreview();
     }
-    Promise.all([refresh(), refreshSync()]);
-  }, [renameFile, previewFile, closePreview, refresh, refreshSync]);
+    refresh();
+  }, [renameFile, previewFile, closePreview, refresh]);
 
   const handleFolderRenameSuccess = useCallback(async () => {
-    await Promise.all([refresh(), refreshSync()]);
-  }, [refresh, refreshSync]);
+    await refresh();
+  }, [refresh]);
 
   // Refresh the file list whenever a rename batch finishes in the background
   // (the modal may have been closed while the batch kept running in the dock).
   const renameCompletedAt = useRenameStore((s) => s.lastCompletedAt);
   useEffect(() => {
     if (renameCompletedAt === 0) return;
-    Promise.all([refresh(), refreshSync()]);
-  }, [renameCompletedAt, refresh, refreshSync]);
+    refresh();
+  }, [renameCompletedAt, refresh]);
 
   function toggleSizeSort() {
     setSizeSort((prev) => {
@@ -1233,7 +1228,7 @@ export default function Home() {
                 dropQueue={dropQueue}
                 onDropHandled={handleDropHandled}
                 onUploadComplete={() => {
-                  Promise.all([refresh(), refreshSync()]);
+                  refresh();
                 }}
                 onCredentialsUpdate={() => {
                   initialize();

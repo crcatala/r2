@@ -185,6 +185,7 @@ export default function TransferDock() {
   const running = dockTasks.filter((t) => t.state === 'active').length;
   const paused = dockTasks.filter((t) => t.state === 'paused').length;
   const failed = dockTasks.filter((t) => t.state === 'error').length;
+  const done = dockTasks.filter((t) => t.state === 'done').length;
 
   // Aggregate progress + combined throughput across all lanes. Transfers are
   // byte-weighted; rename batches are count-based. The two domains blend
@@ -287,7 +288,11 @@ export default function TransferDock() {
       <div className="dock-header">
         <ProgressRing percent={agg.percent} active={running > 0} />
         <span className="dock-title">{summary}</span>
-        <span className="dock-header-total">{total} total</span>
+        {/* Completed-count anchor: unlike byte %, this can only tick upward,
+            so the batch always reads as moving forward. */}
+        <span className="dock-header-total">
+          {done}/{total} done
+        </span>
         <button className="dock-close" onClick={() => setCollapsed(true)} title="Collapse">
           <ShrinkOutlined style={{ fontSize: 11 }} />
         </button>

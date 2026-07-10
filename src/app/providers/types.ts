@@ -77,10 +77,7 @@ export interface RustfsStorageConfig extends BaseStorageConfig {
 }
 
 export type StorageConfig =
-  | R2StorageConfig
-  | AwsStorageConfig
-  | MinioStorageConfig
-  | RustfsStorageConfig;
+  R2StorageConfig | AwsStorageConfig | MinioStorageConfig | RustfsStorageConfig;
 
 export interface SyncResult {
   count: number;

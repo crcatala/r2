@@ -210,6 +210,25 @@ pub async fn get_directory_node(path: String) -> Result<Option<DirectoryNodeResp
     Ok(node.map(|n| n.into()))
 }
 
+/// Batch lookup: one IPC + one config resolve for a whole folder view's
+/// subfolder nodes, instead of one round trip per subfolder. Result aligns
+/// with `paths` (null where the tree has no node yet).
+#[tauri::command]
+pub async fn get_directory_nodes(
+    paths: Vec<String>,
+) -> Result<Vec<Option<DirectoryNodeResponse>>, String> {
+    let (bucket, account_id) = get_current_bucket_info().await?;
+
+    let nodes = db::get_directory_nodes(&bucket, &account_id, &paths)
+        .await
+        .map_err(|e| format!("Failed to get directory nodes: {}", e))?;
+
+    Ok(nodes
+        .into_iter()
+        .map(|node| node.map(|n| n.into()))
+        .collect())
+}
+
 #[tauri::command]
 pub async fn get_all_directory_nodes() -> Result<Vec<DirectoryNodeResponse>, String> {
     let (bucket, account_id) = get_current_bucket_info().await?;
