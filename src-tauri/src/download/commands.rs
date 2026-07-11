@@ -237,7 +237,7 @@ pub async fn pause_all_downloads(
     // Set pause flag for all active downloads
     {
         let registry = DOWNLOAD_PAUSE_REGISTRY.lock().await;
-        for (_, paused) in registry.iter() {
+        for paused in registry.values() {
             paused.store(true, Ordering::SeqCst);
         }
     }
