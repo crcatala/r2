@@ -20,6 +20,7 @@ import dynamic from 'next/dynamic';
 import {
   buildPublicUrl,
   generateSignedUrl,
+  hasSigningCredentials,
   uploadContent,
   isBucketPublic,
   StorageConfig,
@@ -153,12 +154,7 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, previewableFiles.length, navigate]);
 
-  const hasCredentials =
-    !!config?.accessKeyId &&
-    !!config?.secretAccessKey &&
-    (config.provider !== 'aws' || !!config.region) &&
-    (config.provider !== 'minio' || (!!config.endpointHost && !!config.endpointScheme)) &&
-    (config.provider !== 'rustfs' || (!!config.endpointHost && !!config.endpointScheme));
+  const hasCredentials = hasSigningCredentials(config);
   const isPublic = isBucketPublic(config);
   const needsCredentials = !isPublic && !hasCredentials;
   const canEdit = !!(config?.bucket && hasCredentials);

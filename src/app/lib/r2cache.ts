@@ -170,6 +170,26 @@ export function isBucketPublic(config: StorageConfig | null | undefined): boolea
   return true;
 }
 
+/**
+ * Whether we hold enough credentials to mint a signed URL for this bucket.
+ *
+ * Mirrors the per-provider requirements of the `generate_*_signed_url`
+ * commands: S3-style keys everywhere, plus a region for AWS and an endpoint
+ * for MinIO/RustFS. R2's optional API token cannot sign S3 URLs.
+ */
+export function hasSigningCredentials(config: StorageConfig | null | undefined): boolean {
+  if (!config?.accessKeyId || !config.secretAccessKey) return false;
+  switch (config.provider) {
+    case 'aws':
+      return !!config.region;
+    case 'minio':
+    case 'rustfs':
+      return !!config.endpointHost && !!config.endpointScheme;
+    default:
+      return true;
+  }
+}
+
 // ============ Folder Contents (from cache) ============
 
 export interface FolderContents {

@@ -1,5 +1,10 @@
 import { describe, expect, test, mock } from 'bun:test';
-import type { AwsStorageConfig, R2StorageConfig, StorageConfig } from '@/app/providers/types';
+import type {
+  AwsStorageConfig,
+  MinioStorageConfig,
+  R2StorageConfig,
+  StorageConfig,
+} from '@/app/providers/types';
 
 // Provider adapters import the Tauri core at module load; stub it so importing
 // r2cache works in a plain test environment. None of the functions under test
@@ -8,7 +13,8 @@ mock.module('@tauri-apps/api/core', () => ({
   invoke: async () => undefined,
 }));
 
-const { isBucketPublic, buildPublicUrl, buildBucketBaseUrl } = await import('./r2cache');
+const { isBucketPublic, buildPublicUrl, buildBucketBaseUrl, hasSigningCredentials } =
+  await import('./r2cache');
 
 function r2(overrides: Partial<R2StorageConfig> = {}): R2StorageConfig {
   return {
@@ -31,6 +37,48 @@ function aws(overrides: Partial<AwsStorageConfig> = {}): AwsStorageConfig {
     ...overrides,
   };
 }
+
+function minio(overrides: Partial<MinioStorageConfig> = {}): MinioStorageConfig {
+  return {
+    provider: 'minio',
+    accountId: 'minio',
+    bucket: 'bkt',
+    accessKeyId: 'ak',
+    secretAccessKey: 'sk',
+    endpointScheme: 'https',
+    endpointHost: 'minio.example.com',
+    forcePathStyle: true,
+    ...overrides,
+  };
+}
+
+describe('hasSigningCredentials', () => {
+  test('requires both S3 keys', () => {
+    expect(hasSigningCredentials(r2())).toBe(false);
+    expect(hasSigningCredentials(r2({ accessKeyId: 'ak' }))).toBe(false);
+    expect(hasSigningCredentials(r2({ accessKeyId: 'ak', secretAccessKey: 'sk' }))).toBe(true);
+  });
+
+  test('an R2 API token alone cannot sign S3 URLs', () => {
+    expect(hasSigningCredentials(r2({ token: 'api-token' }))).toBe(false);
+  });
+
+  test('AWS additionally needs a region', () => {
+    expect(hasSigningCredentials(aws({ region: '' }))).toBe(false);
+    expect(hasSigningCredentials(aws())).toBe(true);
+  });
+
+  test('MinIO-style providers additionally need an endpoint', () => {
+    expect(hasSigningCredentials(minio())).toBe(true);
+    expect(hasSigningCredentials(minio({ endpointHost: '' }))).toBe(false);
+    expect(hasSigningCredentials(minio({ endpointScheme: '' }))).toBe(false);
+  });
+
+  test('null/undefined config cannot sign', () => {
+    expect(hasSigningCredentials(null)).toBe(false);
+    expect(hasSigningCredentials(undefined)).toBe(false);
+  });
+});
 
 describe('isBucketPublic', () => {
   test('returns false when isPublic is unset', () => {

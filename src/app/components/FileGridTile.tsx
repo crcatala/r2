@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useState } from 'react';
 import {
   FolderOutlined,
   FileImageOutlined,
@@ -14,7 +14,8 @@ import { FolderMetadata } from '@/app/stores/folderSizeStore';
 import { formatBytes } from '@/app/utils/formatBytes';
 import VideoThumbnail from '@/app/components/VideoThumbnail';
 import FileContextMenu from '@/app/components/FileContextMenu';
-import { buildPublicUrl, isBucketPublic, StorageConfig } from '@/app/lib/r2cache';
+import { StorageConfig } from '@/app/lib/r2cache';
+import { usePreviewUrl } from '@/app/hooks/usePreviewUrl';
 import dayjs from 'dayjs';
 
 const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'];
@@ -144,6 +145,39 @@ function TileIcon({ item }: { item: FileItem }) {
   return <FileOutlined style={{ fontSize: 36 }} />;
 }
 
+/**
+ * Grid thumbnail image. The tone-colored type icon stays visible until the
+ * image has actually painted, then the image fades in over it; if the image
+ * fails to load (revoked credentials, expired signature, offline) the tile
+ * shows the icon instead of a broken-image glyph.
+ */
+function ThumbImage({
+  src,
+  alt,
+  fallback,
+}: {
+  src: string;
+  alt: string;
+  fallback: React.ReactNode;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (failed) return <>{fallback}</>;
+  return (
+    <>
+      {!loaded && fallback}
+      <img
+        className={['fg-thumb-img', loaded ? 'is-loaded' : ''].filter(Boolean).join(' ')}
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+      />
+    </>
+  );
+}
+
 interface FileGridTileProps {
   item: FileItem;
   storageConfig?: StorageConfig | null;
@@ -180,9 +214,7 @@ const FileGridTile = memo(function FileGridTile({
   const tone = tileType(item);
   const hasImage = !item.isFolder && isImage(item.name);
   const hasVideo = !item.isFolder && isVideo(item.name);
-  const fileUrl =
-    storageConfig && isBucketPublic(storageConfig) ? buildPublicUrl(storageConfig, item.key) : null;
-  const hasPreview = fileUrl && (hasImage || hasVideo);
+  const fileUrl = usePreviewUrl(storageConfig, item.key, hasImage || hasVideo);
 
   const handleClick = useCallback(() => {
     if (onFocus) onFocus(item);
@@ -233,12 +265,15 @@ const FileGridTile = memo(function FileGridTile({
 
         {/* Thumbnail / preview */}
         <div className={`fg-thumb ${tone}`}>
-          {hasPreview ? (
-            hasImage ? (
-              <img className="fg-thumb-img" src={fileUrl} alt={item.name} loading="lazy" />
-            ) : (
-              <VideoThumbnail src={fileUrl} alt={item.name} />
-            )
+          {fileUrl && hasImage ? (
+            <ThumbImage
+              key={fileUrl}
+              src={fileUrl}
+              alt={item.name}
+              fallback={<TileIcon item={item} />}
+            />
+          ) : fileUrl && hasVideo ? (
+            <VideoThumbnail src={fileUrl} alt={item.name} />
           ) : (
             <TileIcon item={item} />
           )}
