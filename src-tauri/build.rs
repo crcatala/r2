@@ -16,18 +16,22 @@ fn main() {
     // Expose connector permissions only in connector-enabled debug builds.
     let connector_cap = std::path::Path::new("capabilities/connector.json");
     if cfg!(feature = "connector") {
-        std::fs::write(
-            connector_cap,
-            r#"{
+        let contents = r#"{
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "connector",
   "description": "Capability for the tauri-connector plugin",
   "windows": ["main"],
   "permissions": ["connector:default"]
 }
-"#,
-        )
-        .expect("failed to write connector capability");
+"#;
+        // Rewriting an identical file bumps its mtime, which sends `tauri dev`'s
+        // file watcher into a rebuild loop — only write when stale.
+        let up_to_date = std::fs::read_to_string(connector_cap)
+            .map(|existing| existing == contents)
+            .unwrap_or(false);
+        if !up_to_date {
+            std::fs::write(connector_cap, contents).expect("failed to write connector capability");
+        }
     } else if connector_cap.exists() {
         std::fs::remove_file(connector_cap).ok();
     }

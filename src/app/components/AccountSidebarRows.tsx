@@ -40,9 +40,19 @@ interface BucketRowProps {
   active: boolean;
   size?: string | null;
   onClick: () => void;
+  contextMenu?: MenuProps['items'];
+  /** Set when the bucket is mounted locally — drives the marker and its tooltip. */
+  mountedPath?: string | null;
 }
 
-export function BucketRow({ bucketName, active, size, onClick }: BucketRowProps) {
+export function BucketRow({
+  bucketName,
+  active,
+  size,
+  onClick,
+  contextMenu,
+  mountedPath,
+}: BucketRowProps) {
   return (
     <div
       className={['sb-bucket-row', active ? 'active' : ''].filter(Boolean).join(' ')}
@@ -50,7 +60,24 @@ export function BucketRow({ bucketName, active, size, onClick }: BucketRowProps)
     >
       <DatabaseOutlined className="sb-bucket-icon" style={{ fontSize: 12 }} />
       <span className="sb-bucket-name">{bucketName}</span>
+      {mountedPath ? (
+        <Tooltip title={`Mounted at ${mountedPath}`} placement="right">
+          <span className="sb-bucket-mounted" role="img" aria-label={`Mounted at ${mountedPath}`} />
+        </Tooltip>
+      ) : null}
       {size ? <span className="sb-bucket-size">{size}</span> : null}
+      {contextMenu ? (
+        <Dropdown menu={{ items: contextMenu }} trigger={['click']}>
+          <button
+            className="sb-icon-btn"
+            onClick={(e) => e.stopPropagation()}
+            title="Bucket options"
+            style={{ width: 20, height: 20, flexShrink: 0 }}
+          >
+            <MoreOutlined style={{ fontSize: 11 }} />
+          </button>
+        </Dropdown>
+      ) : null}
     </div>
   );
 }
@@ -64,6 +91,8 @@ interface R2AccountChildrenProps {
   search: string;
   onSelectBucket: (tokenId: number, bucketName: string) => void;
   getTokenContextMenu: (token: Token) => MenuProps['items'];
+  getBucketContextMenu: (token: Token, bucketName: string) => MenuProps['items'];
+  getMountedPath: (bucketName: string) => string | null;
 }
 
 export function R2AccountChildren({
@@ -73,6 +102,8 @@ export function R2AccountChildren({
   search,
   onSelectBucket,
   getTokenContextMenu,
+  getBucketContextMenu,
+  getMountedPath,
 }: R2AccountChildrenProps) {
   const tokens = accountData.tokens;
 
@@ -155,6 +186,8 @@ export function R2AccountChildren({
                   bucketName={bucket.name}
                   active={currentTokenId === token.id && currentBucket === bucket.name}
                   onClick={() => onSelectBucket(token.id, bucket.name)}
+                  contextMenu={getBucketContextMenu(token, bucket.name)}
+                  mountedPath={getMountedPath(bucket.name)}
                 />
               ))
             )}
@@ -175,6 +208,8 @@ interface NonR2AccountChildrenProps {
   isCurrentAccount: boolean;
   search: string;
   onSelectBucket: (bucketName: string) => void;
+  getBucketContextMenu: (bucketName: string) => MenuProps['items'];
+  getMountedPath: (bucketName: string) => string | null;
 }
 
 export function NonR2AccountChildren({
@@ -183,6 +218,8 @@ export function NonR2AccountChildren({
   isCurrentAccount,
   search,
   onSelectBucket,
+  getBucketContextMenu,
+  getMountedPath,
 }: NonR2AccountChildrenProps) {
   const buckets = (accountData.buckets as GenericBucket[]).filter((b) =>
     search
@@ -210,6 +247,8 @@ export function NonR2AccountChildren({
           bucketName={bucket.name}
           active={isCurrentAccount && currentBucket === bucket.name}
           onClick={() => onSelectBucket(bucket.name)}
+          contextMenu={getBucketContextMenu(bucket.name)}
+          mountedPath={getMountedPath(bucket.name)}
         />
       ))}
     </div>

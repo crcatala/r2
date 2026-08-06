@@ -11,8 +11,13 @@ import {
   MenuFoldOutlined,
   SearchOutlined,
   SwapOutlined,
+  LinkOutlined,
+  DisconnectOutlined,
+  FolderOpenOutlined,
 } from '@ant-design/icons';
 import { useAccountStore, Token, ProviderAccount } from '@/app/stores/accountStore';
+import { useMountStore, findMount, type MountTarget } from '@/app/stores/mountStore';
+import { detectOs, revealActionLabel } from '@/app/utils/mount';
 import { useThemeStore } from '@/app/stores/themeStore';
 import { useCurrentPathStore } from '@/app/stores/currentPathStore';
 import AccountTransferModal from '@/app/components/AccountTransferModal';
@@ -49,6 +54,10 @@ export default function AccountSidebar({
   const deleteRustfsAccount = useAccountStore((state) => state.deleteRustfsAccount);
   const deleteToken = useAccountStore((state) => state.deleteToken);
 
+  const mounts = useMountStore((state) => state.mounts);
+  const openMountModal = useMountStore((state) => state.openMountModal);
+  const unmountBucket = useMountStore((state) => state.unmount);
+
   const sidebarStyle = useThemeStore((state) => state.sidebarStyle);
   const cycleSidebarStyle = useThemeStore((state) => state.cycleSidebarStyle);
   const setSidebarStyle = useThemeStore((state) => state.setSidebarStyle);
@@ -59,6 +68,8 @@ export default function AccountSidebar({
   const [transferModalOpen, setTransferModalOpen] = useState(false);
 
   const { message, modal } = App.useApp();
+
+  const os = useMemo(() => detectOs(), []);
 
   const collapsed = sidebarStyle === 'collapsed';
 
@@ -221,6 +232,141 @@ export default function AccountSidebar({
     return items;
   }
 
+  /**
+   * Assemble mount credentials for any listed bucket: R2 keys live on the
+   * token, every other provider's on the account. Endpoint/region assembly
+   * mirrors toStorageConfig().
+   *
+   * Must stay free of select*Bucket / set_current_* — mounting a bucket may
+   * never move the user's current selection as a side effect. The account and
+   * token rows already hold every credential this needs.
+   */
+  function buildMountTarget(
+    accountData: ProviderAccount,
+    bucketName: string,
+    token?: Token
+  ): MountTarget {
+    const accountLabel = accountData.account.name || accountData.account.id;
+
+    if (accountData.provider === 'r2') {
+      return {
+        provider: 'r2',
+        accountId: accountData.account.id,
+        accountLabel,
+        bucket: bucketName,
+        accessKeyId: token?.access_key_id ?? '',
+        secretAccessKey: token?.secret_access_key ?? '',
+        region: null,
+        endpointUrl: null,
+        forcePathStyle: null,
+      };
+    }
+
+    if (accountData.provider === 'aws') {
+      const account = accountData.account;
+      return {
+        provider: 'aws',
+        accountId: account.id,
+        accountLabel,
+        bucket: bucketName,
+        accessKeyId: account.access_key_id,
+        secretAccessKey: account.secret_access_key,
+        region: account.region,
+        endpointUrl: account.endpoint_host
+          ? `${account.endpoint_scheme || 'https'}://${account.endpoint_host}`
+          : null,
+        forcePathStyle: account.force_path_style,
+      };
+    }
+
+    const account = accountData.account;
+    return {
+      provider: accountData.provider,
+      accountId: account.id,
+      accountLabel,
+      bucket: bucketName,
+      accessKeyId: account.access_key_id,
+      secretAccessKey: account.secret_access_key,
+      region: null,
+      endpointUrl: `${account.endpoint_scheme}://${account.endpoint_host}`,
+      forcePathStyle: accountData.provider === 'rustfs' ? true : account.force_path_style,
+    };
+  }
+
+  async function handleRevealMount(localPath: string) {
+    try {
+      const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+      await revealItemInDir(localPath);
+    } catch {
+      try {
+        const { openPath } = await import('@tauri-apps/plugin-opener');
+        await openPath(localPath);
+      } catch (e) {
+        console.error('Failed to open mount folder:', e);
+        message.error('Could not open the folder');
+      }
+    }
+  }
+
+  async function handleUnmountBucket(mountId: string, bucketName: string) {
+    const ok = await unmountBucket(mountId);
+    if (ok) {
+      message.success(`${bucketName} unmounted`);
+    } else {
+      message.error(useMountStore.getState().error || `Could not unmount ${bucketName}`);
+    }
+  }
+
+  function getBucketContextMenu(
+    accountData: ProviderAccount,
+    bucketName: string,
+    token?: Token
+  ): MenuProps['items'] {
+    const mount = findMount(mounts, accountData.provider, accountData.account.id, bucketName);
+
+    if (mount) {
+      return [
+        {
+          key: 'reveal',
+          label: revealActionLabel(os),
+          icon: <FolderOpenOutlined />,
+          onClick: (e) => {
+            e.domEvent.stopPropagation();
+            handleRevealMount(mount.localPath);
+          },
+        },
+        { type: 'divider' },
+        {
+          key: 'unmount',
+          label: 'Unmount',
+          icon: <DisconnectOutlined />,
+          onClick: (e) => {
+            e.domEvent.stopPropagation();
+            handleUnmountBucket(mount.mountId, bucketName);
+          },
+        },
+      ];
+    }
+
+    return [
+      {
+        key: 'mount',
+        label: 'Mount as local drive',
+        icon: <LinkOutlined />,
+        onClick: (e) => {
+          e.domEvent.stopPropagation();
+          openMountModal(buildMountTarget(accountData, bucketName, token));
+        },
+      },
+    ];
+  }
+
+  function getMountedPath(accountData: ProviderAccount, bucketName: string): string | null {
+    return (
+      findMount(mounts, accountData.provider, accountData.account.id, bucketName)?.localPath ?? null
+    );
+  }
+
   function getTokenContextMenu(token: Token): MenuProps['items'] {
     return [
       {
@@ -299,6 +445,10 @@ export default function AccountSidebar({
                     search={searchLower}
                     onSelectBucket={handleSelectR2Bucket}
                     getTokenContextMenu={getTokenContextMenu}
+                    getBucketContextMenu={(token, bucketName) =>
+                      getBucketContextMenu(accountData, bucketName, token)
+                    }
+                    getMountedPath={(bucketName) => getMountedPath(accountData, bucketName)}
                   />
                 )}
 
@@ -320,6 +470,10 @@ export default function AccountSidebar({
                         bucketName
                       )
                     }
+                    getBucketContextMenu={(bucketName) =>
+                      getBucketContextMenu(accountData, bucketName)
+                    }
+                    getMountedPath={(bucketName) => getMountedPath(accountData, bucketName)}
                   />
                 )}
               </div>

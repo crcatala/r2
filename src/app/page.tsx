@@ -47,6 +47,8 @@ import {
   type DownloadSession,
 } from '@/app/stores/downloadStore';
 import { setupGlobalRenameListeners, useRenameStore } from '@/app/stores/renameStore';
+import { setupGlobalMountListeners, useMountStore } from '@/app/stores/mountStore';
+import MountModal from '@/app/components/MountModal';
 import { useKeyboardShortcuts } from '@/app/hooks/useKeyboardShortcuts';
 import { useGlobalShortcuts } from '@/app/hooks/useGlobalShortcuts';
 import CommandPalette, { type CommandAction } from '@/app/components/CommandPalette';
@@ -136,6 +138,7 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const { message } = App.useApp();
   const sidebarStyle = useThemeStore((s) => s.sidebarStyle);
+  const mountModalOpen = useMountStore((s) => s.modalOpen);
 
   const config = useMemo<StorageConfig | null>(
     () => toStorageConfig(),
@@ -437,6 +440,7 @@ export default function Home() {
   useEffect(() => {
     setupGlobalDownloadListeners();
     setupGlobalRenameListeners();
+    setupGlobalMountListeners();
   }, []);
 
   // Refill the queue whenever a running download reaches a terminal state.
@@ -1218,6 +1222,8 @@ export default function Home() {
               onClose={() => setSettingsOpen(false)}
               initialTab={settingsTab}
             />
+
+            {mountModalOpen && <MountModal />}
 
             {uploadModalOpen && (
               <UploadModal

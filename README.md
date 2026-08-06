@@ -38,6 +38,11 @@
   - Pause/Resume/Cancel individual or all transfers
   - Background processing - queue continues even when modal is closed
   - Automatic queue continuation after each transfer completes
+- **Mount as Local Drive** - Mount any bucket to a local folder and browse it in Finder / Explorer:
+  - Read-only NFS mount served by the app itself — no macFUSE, WinFsp, or kernel extensions
+  - Works with all providers (R2, AWS S3, MinIO, RustFS)
+  - macOS mounts instantly with no extra software; Linux needs nfs-utils; Windows support is planned
+  - All mounts are removed automatically when the app quits
 - Video thumbnail generation (via ffmpeg)
 - Copy signed or public URLs to clipboard (provider-aware link building)
 - Dark mode support
@@ -222,6 +227,23 @@ Use the Batch Move workflow to sync files between accounts/providers:
 6. Start the transfer and track progress in the Move modal/status bar.
 
 Transfers are queued (up to 5 concurrent), and same-provider transfers prefer server-side copy.
+
+### Mounting a Bucket as a Local Drive
+
+Mount any bucket to a local folder and browse it like a normal disk (read-only in this release):
+
+1. Open the bucket's menu in the sidebar (⋯) → Mount as local drive.
+2. Pick a local folder (defaults to `~/CloudMounts/<bucket>`), then click Mount.
+3. Browse the bucket in Finder / your file manager; open and copy files like local ones.
+4. Unmount from the same menu or the mount dialog. All mounts are removed when the app quits.
+
+How it works: the app runs a small read-only NFSv3 server on `127.0.0.1` and mounts it with your OS's built-in NFS client — no macFUSE, WinFsp, or kernel extensions required. Note: like any local mount, while a bucket is mounted its files are readable by other apps on your machine; the server is never reachable from the network.
+
+Platform notes:
+
+- macOS - Mounts instantly; no extra software, no sudo.
+- Linux - Requires `nfs-utils` (or `nfs-common`). If your distro needs root for NFS mounts, the app shows the exact `sudo mount` command to run once in a terminal.
+- Windows - Not supported yet; planned for a future release.
 
 ### Getting API Credentials
 

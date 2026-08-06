@@ -60,9 +60,14 @@
   --row-h-compact: 30px;
   --row-h-default: 38px;
   --row-h-cozy: 48px;
+
+  --mount-live: #1f9d55;
+  --mount-live-soft: rgba(31, 157, 85, 0.16);
 }
 
 [data-theme='dark'] {
+  --mount-live: #4ade80;
+  --mount-live-soft: rgba(74, 222, 128, 0.18);
   --bg-app: #0e0d0c;
   --bg-panel: #17171a;
   --bg-sunken: #0a0a0a;
@@ -5040,4 +5045,216 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 .toast.info .toast-icon {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* ── Mount: bucket as a local folder ──────────────────────────── */
+
+/* Signature element — the bucket and the folder, joined by a wire whose
+   state is the mount's state: dashed (idle), travelling (mounting),
+   solid with a steady dot (mounted). */
+.mount-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 18px;
+}
+.mount-link-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 44%;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+.mount-link-text {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mount-link-icon {
+  font-size: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.mount-link-wire {
+  flex: 1;
+  min-width: 28px;
+  height: 2px;
+  position: relative;
+  border-radius: 1px;
+  background-image: linear-gradient(90deg, var(--border-strong) 0 5px, transparent 5px 11px);
+  background-size: 11px 2px;
+}
+.mount-link-wire.mounting {
+  overflow: hidden;
+}
+.mount-link-wire.mounting::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
+  background-size: 55% 100%;
+  background-repeat: no-repeat;
+  animation: mount-wire-travel 1.5s linear infinite;
+}
+@keyframes mount-wire-travel {
+  from {
+    background-position: -60% 0;
+  }
+  to {
+    background-position: 160% 0;
+  }
+}
+.mount-link-wire.mounted {
+  background-image: none;
+  background-color: var(--mount-live);
+}
+.mount-link-wire.mounted::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mount-live);
+  box-shadow: 0 0 0 3px var(--mount-live-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mount-link-wire.mounting::before {
+    animation: none;
+    background: var(--accent);
+    opacity: 0.5;
+  }
+}
+
+.mount-path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.mount-path-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.mount-path-row .btn {
+  height: 34px;
+  flex-shrink: 0;
+}
+.mount-path-readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-sunken);
+  border-radius: 7px;
+  min-width: 0;
+}
+.mount-path-readout code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mount-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mount-live);
+  box-shadow: 0 0 0 3px var(--mount-live-soft);
+  flex-shrink: 0;
+}
+
+.mount-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.mount-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mount-note-quiet {
+  color: var(--text-subtle);
+  font-size: 11.5px;
+}
+.mount-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.mount-error {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid rgba(212, 73, 58, 0.3);
+  background: rgba(212, 73, 58, 0.07);
+  border-radius: var(--radius-sm);
+}
+.mount-error-text {
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mount-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.mount-cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.mount-cmd .btn {
+  flex-shrink: 0;
+}
+
+/* Mounted marker on a sidebar bucket row */
+.sb-bucket-mounted {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mount-live);
+  flex-shrink: 0;
+}
+
+/* Keyboard focus stays visible on the sidebar's icon-only buttons */
+.sb-icon-btn:focus-visible,
+.mount-cmd .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

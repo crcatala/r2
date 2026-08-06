@@ -12,6 +12,7 @@ mod account;
 mod commands;
 mod db;
 mod download;
+mod mount;
 mod move_transfer;
 mod providers;
 mod r2;
@@ -429,7 +430,20 @@ pub fn run() {
             move_transfer::commands::get_all_active_move_tasks,
             move_transfer::commands::clear_finished_moves,
             move_transfer::commands::clear_all_moves,
+            // Mount commands
+            commands::mount_bucket,
+            commands::unmount_bucket,
+            commands::list_mounts,
+            commands::default_mount_path,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            // Exit fires once, however the app is quit — tray Quit, the app
+            // menu, or simply closing the last window. Releasing the NFS mounts
+            // here keeps the OS from leaving dead mountpoints behind.
+            if let tauri::RunEvent::Exit = event {
+                mount::manager().unmount_all(app_handle);
+            }
+        });
 }
