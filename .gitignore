@@ -64,3 +64,6 @@ AGENTS.md
 docs/superpowers/
 .omx/
 .omc/
+
+# gstack browse-tool session state (like .omc/)
+.gstack/
