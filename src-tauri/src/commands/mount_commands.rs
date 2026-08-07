@@ -11,6 +11,9 @@ use tauri::Manager;
 #[cfg(not(windows))]
 const MOUNT_ROOT: &str = "CloudMounts";
 
+/// Folder under the app's cache directory holding one staging folder per mount.
+const STAGING_ROOT: &str = "mount-stage";
+
 /// Message returned when mounting is attempted on Windows.
 ///
 /// Windows has no way to reach the server we start: its NFS client resolves the
@@ -51,6 +54,9 @@ pub struct MountBucketInput {
     pub endpoint_url: Option<String>,
     #[serde(default)]
     pub force_path_style: Option<bool>,
+    /// Absent means writable, which is the default a mount is offered as.
+    #[serde(default)]
+    pub read_only: Option<bool>,
 }
 
 /// Hand-written so credentials cannot reach a log line or a panic message.
@@ -66,6 +72,7 @@ impl std::fmt::Debug for MountBucketInput {
             .field("region", &self.region)
             .field("endpoint_url", &self.endpoint_url)
             .field("force_path_style", &self.force_path_style)
+            .field("read_only", &self.read_only)
             .finish()
     }
 }
@@ -164,6 +171,19 @@ impl MountBucketInput {
     }
 }
 
+/// Directory the per-mount staging folders live under.
+///
+/// The app cache directory rather than the system temp directory on purpose:
+/// a file that was written into a mount but not uploaded before the app quit
+/// only exists here, and an OS temp sweep would take it.
+fn staging_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let cache = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to resolve the cache directory: {}", e))?;
+    Ok(cache.join(STAGING_ROOT))
+}
+
 /// Expands a leading `~` against the user's home directory.
 fn expand_home(app: &tauri::AppHandle, path: &str) -> Result<String, String> {
     let path = path.trim();
@@ -231,6 +251,7 @@ pub async fn mount_bucket(
     };
 
     let client = input.create_client().await?;
+    let staging_root = staging_root(&app)?;
 
     let info = mount::manager()
         .mount(MountRequest {
@@ -239,6 +260,9 @@ pub async fn mount_bucket(
             bucket: input.bucket,
             local_path,
             client,
+            read_only: input.read_only.unwrap_or(false),
+            staging_root,
+            app: app.clone(),
         })
         .await?;
 
@@ -249,9 +273,13 @@ pub async fn mount_bucket(
 
 #[tauri::command]
 pub async fn unmount_bucket(mount_id: String, app: tauri::AppHandle) -> Result<(), String> {
-    mount::manager().unmount(&mount_id).await?;
+    // Unmounting can fail after the mount has already been unregistered — the
+    // OS mount is gone but staged writes were not all uploaded — so the list is
+    // broadcast either way, or the sidebar would keep showing a mount that is
+    // no longer there.
+    let result = mount::manager().unmount(&mount_id).await;
     mount::manager().emit_changed(&app);
-    Ok(())
+    result
 }
 
 #[tauri::command]
@@ -338,6 +366,33 @@ mod tests {
     }
 
     #[test]
+    fn a_mount_is_writable_unless_it_asks_not_to_be() {
+        // A payload from before the toggle existed has to keep working, and the
+        // mode it lands in is the new default rather than the old behaviour.
+        assert!(!parse(R2_INPUT).read_only.unwrap_or(false));
+
+        let explicit = |value: &str| {
+            let json = format!(
+                r#"{{
+                    "provider": "r2",
+                    "account_id": "acct",
+                    "bucket": "photos",
+                    "local_path": "/mnt/photos",
+                    "access_key_id": "key",
+                    "secret_access_key": "secret",
+                    "read_only": {}
+                }}"#,
+                value
+            );
+            parse(&json).read_only
+        };
+
+        assert_eq!(explicit("true"), Some(true));
+        assert_eq!(explicit("false"), Some(false));
+        assert_eq!(explicit("null"), None);
+    }
+
+    #[test]
     fn an_endpoint_url_splits_into_scheme_and_host() {
         assert_eq!(
             split_endpoint_url("https://minio.example.com:9000"),
@@ -403,7 +458,8 @@ mod tests {
                 "bucket": "photos",
                 "local_path": "/Users/me/CloudMounts/photos",
                 "access_key_id": "AKIAREALKEY",
-                "secret_access_key": "s3cr3t-do-not-log"
+                "secret_access_key": "s3cr3t-do-not-log",
+                "read_only": true
             }"#,
         );
 
@@ -411,8 +467,10 @@ mod tests {
         assert!(!rendered.contains("AKIAREALKEY"), "{}", rendered);
         assert!(!rendered.contains("s3cr3t-do-not-log"), "{}", rendered);
         assert!(rendered.contains("***"), "{}", rendered);
-        // Non-secret fields stay visible so the struct is still debuggable.
+        // Non-secret fields stay visible so the struct is still debuggable —
+        // including every field added after this test was written.
         assert!(rendered.contains("photos"), "{}", rendered);
+        assert!(rendered.contains("read_only"), "{}", rendered);
     }
 
     #[test]

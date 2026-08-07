@@ -3829,6 +3829,118 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   color: var(--text-muted);
 }
 
+/* ── Mount list (Settings → Mounts tab) ─────────────────────────
+   Sibling of the account list above: same card metrics, same badge →
+   body → trailing-action anatomy. Only the body's first line differs,
+   carrying the mount schematic (bucket, live wire, local folder) that
+   the mount modal and the sidebar marker already speak. */
+.settings-mount-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.settings-mount-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-mount-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  width: 100%;
+  transition: border-color 120ms;
+}
+/* No hover fill: unlike an account card, the row itself is not a button. */
+.settings-mount-card:hover {
+  border-color: var(--border-strong);
+}
+.settings-mount-card .sb-provider-icon {
+  flex-shrink: 0;
+}
+.settings-mount-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* A path is wider than an account name: actions drop to the second line so
+   the schematic keeps the body's full width. */
+.settings-mount-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-mount-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-mount-bucket {
+  max-width: 45%;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The schematic's wire, cut down to a connector between two labels. */
+.mount-link-wire.settings-mount-wire {
+  flex: 0 0 30px;
+  min-width: 30px;
+}
+.settings-mount-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-mount-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.settings-mount-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+  flex-shrink: 0;
+}
+.settings-mount-account {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-mount-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 /* ── Bucket + public-access editor (AccountEditModal) ──────────── */
 .bkt-section-head {
   display: flex;
@@ -5243,6 +5355,14 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   flex-shrink: 0;
 }
 
+/* Writable mounts wear the same green as the live wire. Must stay after
+   `.mount-tag` — same specificity, so source order decides. */
+.mount-tag-live {
+  color: var(--mount-live);
+  border-color: var(--mount-live-soft);
+  background: var(--mount-live-soft);
+}
+
 /* Mounted marker on a sidebar bucket row */
 .sb-bucket-mounted {
   width: 6px;
@@ -5251,9 +5371,26 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   background: var(--mount-live);
   flex-shrink: 0;
 }
+/* The marker is 6px; the shortcut it carries needs a real hit area. */
+.sb-bucket-mounted-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  margin: -5px;
+  border: 0;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sb-bucket-mounted-btn:hover .sb-bucket-mounted {
+  box-shadow: 0 0 0 3px var(--mount-live-soft);
+}
 
 /* Keyboard focus stays visible on the sidebar's icon-only buttons */
 .sb-icon-btn:focus-visible,
+.sb-bucket-mounted-btn:focus-visible,
 .mount-cmd .btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

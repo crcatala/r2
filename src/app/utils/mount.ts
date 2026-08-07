@@ -55,6 +55,48 @@ export function pathLeaf(path: string): string {
 }
 
 /**
+ * Shorten from the middle, so a long mount path keeps both the volume it
+ * starts from and the folder it ends at — the two parts that identify it.
+ */
+export function middleTruncate(text: string, max = 46): string {
+  if (max < 1) return '';
+  if (text.length <= max) return text;
+  if (max === 1) return '…';
+  const keep = max - 1;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${text.slice(0, head)}…${tail > 0 ? text.slice(text.length - tail) : ''}`;
+}
+
+/**
+ * How long a mount has been up, in the same vocabulary the status bar uses.
+ * `mountedAt` is the backend's unix timestamp, in seconds.
+ */
+export function relativeMountTime(mountedAt: number, nowMs: number = Date.now()): string {
+  const diffMin = Math.floor((nowMs - mountedAt * 1000) / 60_000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin === 1) return '1 min ago';
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr === 1) return '1 hr ago';
+  if (diffHr < 24) return `${diffHr} hr ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return diffDay === 1 ? '1 day ago' : `${diffDay} days ago`;
+}
+
+/** What a mount lets you do, named the same way wherever the mode is shown. */
+export function mountModeLabel(readOnly: boolean): string {
+  return readOnly ? 'Read-only' : 'Writable';
+}
+
+/** The consequence of that mode, in one line. */
+export function mountModeHint(readOnly: boolean): string {
+  return readOnly
+    ? 'Files open and copy out; nothing writes back.'
+    : 'Changes in this folder upload to the bucket. Deletes are real.';
+}
+
+/**
  * A Linux mount that needs elevation comes back with the exact command to run.
  * Pull that line out so it can be shown as copyable code.
  */

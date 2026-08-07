@@ -43,6 +43,8 @@ interface BucketRowProps {
   contextMenu?: MenuProps['items'];
   /** Set when the bucket is mounted locally — drives the marker and its tooltip. */
   mountedPath?: string | null;
+  /** Makes the mounted marker a shortcut into Settings › Mounts. */
+  onOpenMounts?: () => void;
 }
 
 export function BucketRow({
@@ -52,6 +54,7 @@ export function BucketRow({
   onClick,
   contextMenu,
   mountedPath,
+  onOpenMounts,
 }: BucketRowProps) {
   return (
     <div
@@ -61,9 +64,28 @@ export function BucketRow({
       <DatabaseOutlined className="sb-bucket-icon" style={{ fontSize: 12 }} />
       <span className="sb-bucket-name">{bucketName}</span>
       {mountedPath ? (
-        <Tooltip title={`Mounted at ${mountedPath}`} placement="right">
-          <span className="sb-bucket-mounted" role="img" aria-label={`Mounted at ${mountedPath}`} />
-        </Tooltip>
+        onOpenMounts ? (
+          <Tooltip title={`Mounted at ${mountedPath} — click to manage`} placement="right">
+            <button
+              className="sb-bucket-mounted-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenMounts();
+              }}
+              aria-label={`Mounted at ${mountedPath}. Manage mounts`}
+            >
+              <span className="sb-bucket-mounted" />
+            </button>
+          </Tooltip>
+        ) : (
+          <Tooltip title={`Mounted at ${mountedPath}`} placement="right">
+            <span
+              className="sb-bucket-mounted"
+              role="img"
+              aria-label={`Mounted at ${mountedPath}`}
+            />
+          </Tooltip>
+        )
       ) : null}
       {size ? <span className="sb-bucket-size">{size}</span> : null}
       {contextMenu ? (
@@ -93,6 +115,7 @@ interface R2AccountChildrenProps {
   getTokenContextMenu: (token: Token) => MenuProps['items'];
   getBucketContextMenu: (token: Token, bucketName: string) => MenuProps['items'];
   getMountedPath: (bucketName: string) => string | null;
+  onOpenMounts?: () => void;
 }
 
 export function R2AccountChildren({
@@ -104,6 +127,7 @@ export function R2AccountChildren({
   getTokenContextMenu,
   getBucketContextMenu,
   getMountedPath,
+  onOpenMounts,
 }: R2AccountChildrenProps) {
   const tokens = accountData.tokens;
 
@@ -188,6 +212,7 @@ export function R2AccountChildren({
                   onClick={() => onSelectBucket(token.id, bucket.name)}
                   contextMenu={getBucketContextMenu(token, bucket.name)}
                   mountedPath={getMountedPath(bucket.name)}
+                  onOpenMounts={onOpenMounts}
                 />
               ))
             )}
@@ -210,6 +235,7 @@ interface NonR2AccountChildrenProps {
   onSelectBucket: (bucketName: string) => void;
   getBucketContextMenu: (bucketName: string) => MenuProps['items'];
   getMountedPath: (bucketName: string) => string | null;
+  onOpenMounts?: () => void;
 }
 
 export function NonR2AccountChildren({
@@ -220,6 +246,7 @@ export function NonR2AccountChildren({
   onSelectBucket,
   getBucketContextMenu,
   getMountedPath,
+  onOpenMounts,
 }: NonR2AccountChildrenProps) {
   const buckets = (accountData.buckets as GenericBucket[]).filter((b) =>
     search
@@ -249,6 +276,7 @@ export function NonR2AccountChildren({
           onClick={() => onSelectBucket(bucket.name)}
           contextMenu={getBucketContextMenu(bucket.name)}
           mountedPath={getMountedPath(bucket.name)}
+          onOpenMounts={onOpenMounts}
         />
       ))}
     </div>

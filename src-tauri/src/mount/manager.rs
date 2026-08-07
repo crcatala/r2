@@ -1,7 +1,7 @@
 //! Mount lifecycle: one localhost NFS server plus one OS mount per bucket.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -15,11 +15,21 @@ use tokio::task::JoinHandle;
 
 use super::nfs_fs::S3NfsFs;
 use super::platform::{self, MountPlatform};
+use super::stage;
 
 /// Total time the exit path may spend unmounting, across every mount and every
 /// fallback command. App exit runs on the main thread, so the whole teardown —
 /// not just one attempt — has to be bounded.
 const EXIT_UNMOUNT_BUDGET: Duration = Duration::from_secs(8);
+/// Total time the exit path may spend uploading staged writes, across every
+/// mount. Whatever does not fit is left on disk rather than delaying the quit.
+const EXIT_FLUSH_BUDGET: Duration = Duration::from_secs(10);
+/// Upload rounds attempted before the client is disconnected, and after.
+const DRAIN_ROUNDS: u32 = 3;
+/// The exit path retries nothing: every round and every attempt comes out of
+/// the budget shared with the other mounts.
+const EXIT_DRAIN_ROUNDS: u32 = 1;
+const EXIT_UPLOAD_ATTEMPTS: u32 = 1;
 /// Ceiling on any single blocking unmount attempt within that budget.
 const EXIT_UNMOUNT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Shorter ceiling for the unmount used to clear a leftover mount.
@@ -78,11 +88,24 @@ pub struct MountRequest {
     /// Absolute directory path (unix) or drive specifier such as `Z:` (Windows).
     pub local_path: String,
     pub client: Client,
+    pub read_only: bool,
+    /// Directory the per-mount staging folder is created under. Deliberately
+    /// the app's cache directory rather than the system temp directory:
+    /// unflushed writes have to survive an OS temp sweep so they can still be
+    /// recovered by hand.
+    pub staging_root: PathBuf,
+    /// Used by the flusher to report an upload it could not complete.
+    pub app: tauri::AppHandle,
 }
 
 struct ActiveMount {
     info: MountInfo,
     server: JoinHandle<()>,
+    /// Absent on a read-only mount, which has nothing to upload.
+    flusher: Option<JoinHandle<()>>,
+    /// Second handle to the filesystem, kept so staged writes can be drained
+    /// once the client has been disconnected.
+    fs: S3NfsFs,
 }
 
 /// Registry of active mounts.
@@ -165,8 +188,35 @@ impl MountManager {
             .await
             .map_err(|e| format!("Failed to open bucket \"{}\": {}", request.bucket, e))?;
 
-        let fs = S3NfsFs::new(request.client, request.bucket.clone());
-        let listener = NFSTcpListener::bind("127.0.0.1:0", fs)
+        let active: Vec<String> = match self.mounts.lock() {
+            Ok(mounts) => mounts.keys().cloned().collect(),
+            Err(_) => Vec::new(),
+        };
+        sweep_staging_root(&request.staging_root, &active);
+
+        // The id is minted up front because the staging folder is named after
+        // it and the filesystem needs it before the server can bind.
+        let mount_id = self.next_mount_id();
+        let staging_dir = request.staging_root.join(&mount_id);
+        if !request.read_only {
+            // Surfaced now rather than at the first write, when the failure
+            // would reach the user as an unexplained I/O error.
+            tokio::fs::create_dir_all(&staging_dir).await.map_err(|e| {
+                format!(
+                    "Failed to create the staging folder \"{}\": {}",
+                    staging_dir.display(),
+                    e
+                )
+            })?;
+        }
+
+        let fs = S3NfsFs::new(
+            request.client,
+            request.bucket.clone(),
+            request.read_only,
+            staging_dir,
+        );
+        let listener = NFSTcpListener::bind("127.0.0.1:0", fs.clone())
             .await
             .map_err(|e| format!("Failed to start local NFS server: {}", e))?;
         let port = listener.get_listen_port();
@@ -177,22 +227,29 @@ impl MountManager {
             }
         });
 
-        if let Err(e) = run_mount_command(platform, port, &target).await {
+        if let Err(e) = run_mount_command(platform, port, &target, request.read_only).await {
             server.abort();
+            let _ = tokio::fs::remove_dir(fs.staging_root()).await;
             if created_dir {
                 let _ = std::fs::remove_dir(&target);
             }
             return Err(e);
         }
 
+        let flusher = if request.read_only {
+            None
+        } else {
+            Some(fs.spawn_flusher(request.app.clone(), mount_id.clone()))
+        };
+
         let info = MountInfo {
-            mount_id: self.next_mount_id(),
+            mount_id,
             provider: request.provider,
             account_id: request.account_id,
             bucket: request.bucket,
             local_path: target,
             port,
-            read_only: true,
+            read_only: request.read_only,
             mounted_at: chrono::Utc::now().timestamp(),
         };
 
@@ -204,46 +261,91 @@ impl MountManager {
                     ActiveMount {
                         info: info.clone(),
                         server,
+                        flusher,
+                        fs,
                     },
                 );
                 None
             }
-            Err(_) => Some(server),
+            Err(_) => Some((server, flusher)),
         };
 
-        if let Some(server) = unregistered {
+        if let Some((server, flusher)) = unregistered {
             // Nothing can reach this mount if it cannot be registered, so undo
             // it rather than leave a mountpoint nobody can release.
             let _ = run_umount_command(platform, &info.local_path).await;
             server.abort();
+            if let Some(flusher) = flusher {
+                flusher.abort();
+            }
             return Err("Mount registry is unavailable".to_string());
         }
 
         Ok(info)
     }
 
-    /// Unmounts a single mount. The mount stays registered if the OS refuses to
-    /// unmount it (usually a file still open), so the user can retry.
+    /// Unmounts a single mount, uploading anything staged along the way.
+    ///
+    /// The order matters for data safety. The pre-drain narrows the window;
+    /// unmounting then forces the OS client to write back its own page cache,
+    /// so the last writes of a copy only arrive after the `umount` returns,
+    /// which is what the post-drain is for. If the OS refuses to unmount
+    /// (usually a file still open) the mount stays registered, with its flusher
+    /// still running, so the user can retry.
     pub async fn unmount(&self, mount_id: &str) -> Result<(), String> {
-        let local_path = {
+        let (local_path, fs) = {
             let mounts = self
                 .mounts
                 .lock()
                 .map_err(|_| "Mount registry is unavailable".to_string())?;
             mounts
                 .get(mount_id)
-                .map(|mount| mount.info.local_path.clone())
+                .map(|mount| (mount.info.local_path.clone(), mount.fs.clone()))
                 .ok_or_else(|| format!("No active mount with id \"{}\"", mount_id))?
         };
 
+        fs.drain(DRAIN_ROUNDS, stage::UPLOAD_ATTEMPTS).await;
+
         run_umount_command(MountPlatform::CURRENT, &local_path).await?;
 
-        if let Ok(mut mounts) = self.mounts.lock() {
-            if let Some(mount) = mounts.remove(mount_id) {
-                mount.server.abort();
+        let removed = match self.mounts.lock() {
+            Ok(mut mounts) => mounts.remove(mount_id),
+            Err(_) => None,
+        };
+        if let Some(mount) = &removed {
+            // Stop the background flusher before the final drain so the two do
+            // not upload the same file at once.
+            if let Some(flusher) = &mount.flusher {
+                flusher.abort();
             }
         }
+        // Aborting the scanner does not stop the uploads it already started —
+        // those are detached tasks. Waiting them out is what keeps the drain
+        // below from racing one for the same key, and keeps the staging folder
+        // from being deleted while a multipart upload is still reading it.
+        fs.wait_for_flushes().await;
+        fs.reset_flush_state().await;
 
+        let unflushed = fs.drain(DRAIN_ROUNDS, stage::UPLOAD_ATTEMPTS).await;
+
+        if let Some(mount) = removed {
+            mount.server.abort();
+        }
+
+        if unflushed > 0 {
+            // The OS mount is gone either way, so the registry entry cannot
+            // stay — but the staged copies do, because they are the only place
+            // that content still exists.
+            return Err(format!(
+                "Unmounted \"{}\", but {} file{} could not be uploaded. The unsent copies are kept in {}",
+                local_path,
+                unflushed,
+                if unflushed == 1 { "" } else { "s" },
+                fs.staging_root().display()
+            ));
+        }
+
+        let _ = tokio::fs::remove_dir_all(fs.staging_root()).await;
         Ok(())
     }
 
@@ -265,6 +367,7 @@ impl MountManager {
 
         let platform = MountPlatform::CURRENT;
         let deadline = Instant::now() + EXIT_UNMOUNT_BUDGET;
+        let mut writable = Vec::new();
 
         for mount in drained {
             let mut unmounted = false;
@@ -286,8 +389,13 @@ impl MountManager {
             }
             // The server task is aborted either way — the process is going away.
             mount.server.abort();
+            if let Some(flusher) = mount.flusher {
+                flusher.abort();
+                writable.push(mount.fs);
+            }
         }
 
+        drain_on_exit(writable);
         self.emit_changed(app);
     }
 
@@ -309,6 +417,94 @@ impl MountManager {
         }
 
         Ok(())
+    }
+}
+
+/// Clears out staging folders left behind by an earlier session.
+///
+/// An empty one is just litter from a clean unmount that raced the process
+/// exiting. A folder with files in it holds writes that never reached the
+/// bucket, so it is kept and its path logged — deleting it would be deleting
+/// the only copy. Folders belonging to mounts that are live right now are left
+/// alone, since one of them is in use by definition.
+fn sweep_staging_root(root: &Path, active: &[String]) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || active.iter().any(|id| entry.file_name() == id.as_str()) {
+            continue;
+        }
+        match std::fs::read_dir(&path).map(|mut dir| dir.next().is_none()) {
+            Ok(true) => {
+                let _ = std::fs::remove_dir(&path);
+            }
+            Ok(false) => log::warn!(
+                "mount: \"{}\" still holds writes from an earlier session that never reached the bucket",
+                path.display()
+            ),
+            Err(_) => {}
+        }
+    }
+}
+
+/// Uploads whatever the writable mounts still hold, within one shared budget.
+///
+/// Runs from Tauri's exit handler, which is not inside the async runtime, so
+/// the async drain is entered through `block_on`. Quitting mid-copy is the one
+/// case where content can be left behind; the staging folder is kept and its
+/// path logged so the file can still be recovered by hand.
+fn drain_on_exit(mounts: Vec<S3NfsFs>) {
+    if mounts.is_empty() {
+        return;
+    }
+
+    let deadline = Instant::now() + EXIT_FLUSH_BUDGET;
+    for fs in mounts {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let staging_root = fs.staging_root().to_path_buf();
+
+        let unflushed = if remaining.is_zero() {
+            1
+        } else {
+            tauri::async_runtime::block_on(async {
+                // The uploads the flusher already started are detached tasks
+                // that the abort did not touch. They have to finish before the
+                // drain, or two PUTs race for one key and the older bytes can
+                // be the ones that land last.
+                if tokio::time::timeout(remaining, fs.wait_for_flushes())
+                    .await
+                    .is_err()
+                {
+                    return 1;
+                }
+
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return 1;
+                }
+
+                fs.reset_flush_state().await;
+                // One round, one attempt: the budget is shared across every
+                // mount, so a file that is failing must not spend it retrying.
+                // A timeout counts as a file left behind — all that matters
+                // past here is whether the staging folder has to be kept.
+                tokio::time::timeout(remaining, fs.drain(EXIT_DRAIN_ROUNDS, EXIT_UPLOAD_ATTEMPTS))
+                    .await
+                    .unwrap_or(1)
+            })
+        };
+
+        if unflushed > 0 {
+            log::warn!(
+                "mount: quit before everything was uploaded; the unsent copies are kept in {}",
+                staging_root.display()
+            );
+        } else {
+            let _ = std::fs::remove_dir_all(&staging_root);
+        }
     }
 }
 
@@ -551,8 +747,13 @@ async fn run_with_timeout(
     }
 }
 
-async fn run_mount_command(platform: MountPlatform, port: u16, target: &str) -> Result<(), String> {
-    let argv = platform::mount_argv(platform, port, target);
+async fn run_mount_command(
+    platform: MountPlatform,
+    port: u16,
+    target: &str,
+    read_only: bool,
+) -> Result<(), String> {
+    let argv = platform::mount_argv(platform, port, target, read_only);
 
     match run_with_timeout(&argv, MOUNT_COMMAND_TIMEOUT).await {
         Ok(output) if output.status.success() => Ok(()),
@@ -563,7 +764,9 @@ async fn run_mount_command(platform: MountPlatform, port: u16, target: &str) -> 
             } else {
                 stderr
             };
-            Err(mount_failure_message(platform, port, target, &detail))
+            Err(mount_failure_message(
+                platform, port, target, read_only, &detail,
+            ))
         }
         // A timeout still carries the manual command, since running it by hand
         // is exactly how the user sees what the mount is waiting on.
@@ -571,6 +774,7 @@ async fn run_mount_command(platform: MountPlatform, port: u16, target: &str) -> 
             platform,
             port,
             target,
+            read_only,
             &format!(
                 "{} timed out after {} seconds",
                 argv[0],
@@ -587,12 +791,18 @@ async fn run_mount_command(platform: MountPlatform, port: u16, target: &str) -> 
 /// The manual command occupies the final line on its own, unindented, so the UI
 /// can lift it into a copyable block. On Linux that line begins with
 /// `sudo mount`, which is exactly what the frontend keys its extraction on.
-fn mount_failure_message(platform: MountPlatform, port: u16, target: &str, detail: &str) -> String {
+fn mount_failure_message(
+    platform: MountPlatform,
+    port: u16,
+    target: &str,
+    read_only: bool,
+    detail: &str,
+) -> String {
     format!(
         "Failed to mount at \"{}\": {}\n\nRun this command manually to mount it yourself:\n{}",
         target,
         detail,
-        platform::manual_mount_command(platform, port, target)
+        platform::manual_mount_command(platform, port, target, read_only)
     )
 }
 
@@ -794,6 +1004,7 @@ mod tests {
             MountPlatform::Linux,
             51234,
             "/home/me/CloudMounts/photos",
+            false,
             "mount.nfs: failed, reason given by server: No such file or directory",
         );
 
@@ -813,6 +1024,7 @@ mod tests {
             MountPlatform::MacOs,
             51234,
             "/Users/me/CloudMounts/photos",
+            false,
             "mount_nfs: can't mount",
         );
 
@@ -880,6 +1092,65 @@ mod tests {
         assert_eq!(MOUNT_COMMAND_TIMEOUT, Duration::from_secs(30));
         assert_eq!(UNMOUNT_COMMAND_TIMEOUT, Duration::from_secs(15));
         assert!(UNMOUNT_COMMAND_TIMEOUT > EXIT_UNMOUNT_ATTEMPT_TIMEOUT);
+    }
+
+    #[test]
+    fn the_exit_flush_budget_is_bounded_and_separate_from_the_unmount_budget() {
+        // Unmounting has to happen before the flush — that is what makes the OS
+        // hand over the last writes — so the two budgets are consecutive and
+        // both have to be short enough that quitting still feels instant.
+        assert_eq!(EXIT_FLUSH_BUDGET, Duration::from_secs(10));
+        assert!(EXIT_UNMOUNT_BUDGET + EXIT_FLUSH_BUDGET <= Duration::from_secs(20));
+    }
+
+    #[test]
+    fn the_exit_path_never_retries_a_failing_upload() {
+        // Every retry comes out of a budget shared with the other mounts, so
+        // one bad file must not be able to spend it.
+        assert_eq!(EXIT_DRAIN_ROUNDS, 1);
+        assert_eq!(EXIT_UPLOAD_ATTEMPTS, 1);
+        // An interactive unmount has no shared budget and does keep trying.
+        assert_eq!(DRAIN_ROUNDS, 3);
+    }
+
+    #[test]
+    fn a_sweep_removes_empty_leftovers_and_keeps_the_rest() {
+        let root = std::env::temp_dir().join(format!("r2-mount-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let empty = root.join("mnt-old-empty");
+        let unsent = root.join("mnt-old-unsent");
+        let live = root.join("mnt-live");
+        for dir in [&empty, &unsent, &live] {
+            std::fs::create_dir_all(dir).expect("create staging dir");
+        }
+        std::fs::write(unsent.join("42"), b"never uploaded").expect("write");
+        std::fs::write(live.join("7"), b"in use").expect("write");
+
+        sweep_staging_root(&root, &["mnt-live".to_string()]);
+
+        assert!(!empty.exists(), "an empty leftover is just litter");
+        assert!(
+            unsent.exists(),
+            "a folder with unsent writes is the only copy of them"
+        );
+        assert!(live.exists(), "a live mount's folder is in use");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sweep_of_a_missing_root_is_harmless() {
+        sweep_staging_root(Path::new("/definitely/not/a/real/staging/root"), &[]);
+    }
+
+    #[test]
+    fn draining_nothing_costs_nothing() {
+        // The exit path runs on the main thread with no async context, so the
+        // read-only case must not enter the runtime at all.
+        let started = Instant::now();
+        drain_on_exit(Vec::new());
+        assert!(started.elapsed() < Duration::from_millis(50));
     }
 
     #[cfg(unix)]

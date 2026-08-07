@@ -26,13 +26,14 @@ import {
   R2AccountChildren,
   NonR2AccountChildren,
 } from '@/app/components/AccountSidebarRows';
+import type { SettingsTab } from '@/app/components/SettingsModal';
 
 interface AccountSidebarProps {
   onAddAccount: () => void;
   onEditAccount: (account: ProviderAccount) => void;
   onAddToken: (accountId: string) => void;
   onEditToken: (token: Token) => void;
-  onOpenSettings?: (tab?: 'appearance' | 'layout' | 'account' | 'shortcuts') => void;
+  onOpenSettings?: (tab?: SettingsTab) => void;
 }
 
 export default function AccountSidebar({
@@ -449,6 +450,7 @@ export default function AccountSidebar({
                       getBucketContextMenu(accountData, bucketName, token)
                     }
                     getMountedPath={(bucketName) => getMountedPath(accountData, bucketName)}
+                    onOpenMounts={onOpenSettings && (() => onOpenSettings('mounts'))}
                   />
                 )}
 
@@ -474,6 +476,7 @@ export default function AccountSidebar({
                       getBucketContextMenu(accountData, bucketName)
                     }
                     getMountedPath={(bucketName) => getMountedPath(accountData, bucketName)}
+                    onOpenMounts={onOpenSettings && (() => onOpenSettings('mounts'))}
                   />
                 )}
               </div>

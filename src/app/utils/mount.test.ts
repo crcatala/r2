@@ -4,9 +4,13 @@ import {
   extractSudoCommand,
   joinMountPath,
   messageWithoutSudoCommand,
+  middleTruncate,
+  mountModeHint,
+  mountModeLabel,
   mountRequirementHint,
   pathLeaf,
   pathSeparator,
+  relativeMountTime,
   revealActionLabel,
 } from './mount';
 
@@ -133,5 +137,58 @@ describe('messageWithoutSudoCommand', () => {
 
   test('passes an unrelated error through untouched', () => {
     expect(messageWithoutSudoCommand('Bucket not found')).toBe('Bucket not found');
+  });
+});
+
+describe('middleTruncate', () => {
+  test('leaves anything that already fits alone', () => {
+    expect(middleTruncate('/Users/me/photos', 46)).toBe('/Users/me/photos');
+    expect(middleTruncate('abcde', 5)).toBe('abcde');
+  });
+
+  test('keeps both ends of an over-long path', () => {
+    const path = '/Users/me/Library/Application Support/CloudMounts/product-photos-archive';
+    const short = middleTruncate(path, 30);
+
+    expect(short.length).toBe(30);
+    expect(short).toBe('/Users/me/Libra…photos-archive');
+  });
+
+  test('degrades sanely at tiny widths', () => {
+    expect(middleTruncate('abcdef', 1)).toBe('…');
+    expect(middleTruncate('abcdef', 2)).toBe('a…');
+    expect(middleTruncate('abcdef', 0)).toBe('');
+  });
+});
+
+describe('relativeMountTime', () => {
+  const now = Date.UTC(2026, 0, 2, 12, 0, 0);
+  const at = (msAgo: number) => Math.floor((now - msAgo) / 1000);
+
+  test('counts up through minutes, hours and days', () => {
+    expect(relativeMountTime(at(20_000), now)).toBe('just now');
+    expect(relativeMountTime(at(60_000), now)).toBe('1 min ago');
+    expect(relativeMountTime(at(9 * 60_000), now)).toBe('9 min ago');
+    expect(relativeMountTime(at(60 * 60_000), now)).toBe('1 hr ago');
+    expect(relativeMountTime(at(5 * 3_600_000), now)).toBe('5 hr ago');
+    expect(relativeMountTime(at(24 * 3_600_000), now)).toBe('1 day ago');
+    expect(relativeMountTime(at(3 * 24 * 3_600_000), now)).toBe('3 days ago');
+  });
+
+  test('reads a clock-skewed future timestamp as just now', () => {
+    expect(relativeMountTime(at(-90_000), now)).toBe('just now');
+  });
+});
+
+describe('mount mode copy', () => {
+  test('names the mode the same way everywhere it is shown', () => {
+    expect(mountModeLabel(false)).toBe('Writable');
+    expect(mountModeLabel(true)).toBe('Read-only');
+  });
+
+  test('spells out what each mode does to the bucket', () => {
+    expect(mountModeHint(false)).toContain('upload to the bucket');
+    expect(mountModeHint(false)).toContain('Deletes are real');
+    expect(mountModeHint(true)).toContain('nothing writes back');
   });
 });

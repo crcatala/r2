@@ -5,6 +5,7 @@ import { App } from 'antd';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   CheckOutlined,
+  CloudUploadOutlined,
   CopyOutlined,
   FolderOpenOutlined,
   LinkOutlined,
@@ -24,6 +25,8 @@ import {
   extractSudoCommand,
   joinMountPath,
   messageWithoutSudoCommand,
+  mountModeHint,
+  mountModeLabel,
   mountRequirementHint,
   pathLeaf,
   revealActionLabel,
@@ -53,9 +56,18 @@ export default function MountModal() {
   const { message } = App.useApp();
   const os = useMemo(() => detectOs(), []);
   const [localPath, setLocalPath] = useState('');
+  const [readOnly, setReadOnly] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const bucket = target?.bucket ?? '';
+  const targetProvider = target?.provider;
+  const targetAccountId = target?.accountId;
+
+  // The mode belongs to the mount, not to the dialog: a different bucket starts
+  // from the writable default rather than inheriting the last choice.
+  useEffect(() => {
+    setReadOnly(false);
+  }, [bucket, targetProvider, targetAccountId]);
 
   // Prefill the path: an existing mount's own path, otherwise the backend's default.
   useEffect(() => {
@@ -98,10 +110,11 @@ export default function MountModal() {
       region: target.region ?? null,
       endpoint_url: target.endpointUrl ?? null,
       force_path_style: target.forcePathStyle ?? null,
+      read_only: readOnly,
     };
     const info = await mountBucket(input);
     if (info) message.success(`${target.bucket} mounted at ${info.localPath}`);
-  }, [target, localPath, mountBucket, message]);
+  }, [target, localPath, readOnly, mountBucket, message]);
 
   const handleUnmount = useCallback(async () => {
     if (!mount) return;
@@ -196,44 +209,83 @@ export default function MountModal() {
       </div>
 
       {mount ? (
-        <div className="field">
-          <div className="field-label">Mounted at</div>
-          <div className="mount-path-readout">
-            <span className="mount-live-dot" aria-hidden="true" />
-            <code>{mount.localPath}</code>
+        <>
+          <div className="field">
+            <div className="field-label">Mounted at</div>
+            <div className="mount-path-readout">
+              <span className="mount-live-dot" aria-hidden="true" />
+              <code>{mount.localPath}</code>
+            </div>
+            <div className="field-hint">
+              Open it like any folder. Unmount before deleting or moving it.
+            </div>
           </div>
-          <div className="field-hint">
-            Open it like any folder. Unmount before deleting or moving it.
+
+          <div className="mount-notes">
+            <div className="mount-note">
+              <span
+                className={['mount-tag', mount.readOnly ? '' : 'mount-tag-live']
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                {mount.readOnly ? (
+                  <LockOutlined style={{ fontSize: 10 }} />
+                ) : (
+                  <CloudUploadOutlined style={{ fontSize: 10 }} />
+                )}{' '}
+                {mountModeLabel(mount.readOnly)}
+              </span>
+              <span>{mountModeHint(mount.readOnly)}</span>
+            </div>
+            {!mount.readOnly && (
+              <div className="mount-note mount-note-quiet">
+                Files you drop here upload in the background — keep the app running until they
+                finish.
+              </div>
+            )}
           </div>
-        </div>
+        </>
       ) : (
-        <div className="field">
-          <div className="field-label">Local path</div>
-          <div className="mount-path-row">
-            <input
-              className="input mono"
-              value={localPath}
-              onChange={(e) => setLocalPath(e.target.value)}
-              placeholder="Where the bucket should appear"
-              aria-label="Local path"
-            />
-            <button className="btn" onClick={handleChooseFolder} disabled={isMounting}>
-              Choose folder…
+        <>
+          <div className="field">
+            <div className="field-label">Local path</div>
+            <div className="mount-path-row">
+              <input
+                className="input mono"
+                value={localPath}
+                onChange={(e) => setLocalPath(e.target.value)}
+                placeholder="Where the bucket should appear"
+                aria-label="Local path"
+              />
+              <button className="btn" onClick={handleChooseFolder} disabled={isMounting}>
+                Choose folder…
+              </button>
+            </div>
+            <div className="field-hint">Choosing a folder adds the bucket name to the end.</div>
+          </div>
+
+          <div className="field">
+            <button
+              className={['toggle-row', !readOnly && 'on'].filter(Boolean).join(' ')}
+              onClick={() => setReadOnly((v) => !v)}
+              disabled={isMounting}
+              aria-pressed={!readOnly}
+            >
+              <span className="option-row-text">
+                <strong>Allow changes</strong>
+                <span>{mountModeHint(readOnly)}</span>
+              </span>
+              <span className="toggle-switch">
+                <span className="toggle-knob" />
+              </span>
             </button>
           </div>
-          <div className="field-hint">Choosing a folder adds the bucket name to the end.</div>
-        </div>
-      )}
 
-      <div className="mount-notes">
-        <div className="mount-note">
-          <span className="mount-tag">
-            <LockOutlined style={{ fontSize: 10 }} /> Read-only
-          </span>
-          <span>Files open and copy out; nothing writes back to the bucket.</span>
-        </div>
-        <div className="mount-note mount-note-quiet">{mountRequirementHint(os)}</div>
-      </div>
+          <div className="mount-notes">
+            <div className="mount-note mount-note-quiet">{mountRequirementHint(os)}</div>
+          </div>
+        </>
+      )}
 
       {error && (
         <div className="mount-error">

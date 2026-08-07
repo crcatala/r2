@@ -27,9 +27,14 @@ impl MountPlatform {
 /// NFS client options for the unix mount commands. `actimeo` keeps attribute
 /// lookups off the network for two minutes, which matters a lot when every
 /// miss is an S3 round trip.
-fn unix_options(port: u16) -> String {
+///
+/// A read-only mount is marked `ro` so the client greys out the affordances
+/// that would fail, instead of letting the user try and collect an I/O error.
+fn unix_options(port: u16, read_only: bool) -> String {
+    let access = if read_only { "ro," } else { "" };
     format!(
-        "vers=3,tcp,rsize=131072,actimeo=120,port={port},mountport={port}",
+        "{access}vers=3,tcp,rsize=131072,wsize=131072,actimeo=120,port={port},mountport={port}",
+        access = access,
         port = port
     )
 }
@@ -38,19 +43,24 @@ fn unix_options(port: u16) -> String {
 ///
 /// `target` is a directory path on macOS/Linux and a drive specifier such as
 /// `Z:` on Windows.
-pub fn mount_argv(platform: MountPlatform, port: u16, target: &str) -> Vec<String> {
+pub fn mount_argv(
+    platform: MountPlatform,
+    port: u16,
+    target: &str,
+    read_only: bool,
+) -> Vec<String> {
     match platform {
         MountPlatform::MacOs => vec![
             "/sbin/mount_nfs".to_string(),
             "-o".to_string(),
-            format!("nolocks,{}", unix_options(port)),
+            format!("nolocks,{}", unix_options(port, read_only)),
             "localhost:/".to_string(),
             target.to_string(),
         ],
         MountPlatform::Linux => vec![
             "mount.nfs".to_string(),
             "-o".to_string(),
-            format!("user,noacl,nolock,{}", unix_options(port)),
+            format!("user,noacl,nolock,{}", unix_options(port, read_only)),
             "localhost:/".to_string(),
             target.to_string(),
         ],
@@ -93,8 +103,13 @@ pub fn umount_argvs(platform: MountPlatform, target: &str) -> Vec<Vec<String>> {
 /// Copy-pasteable mount command shown to the user when the automatic mount
 /// fails. Linux distributions commonly require root for `mount.nfs`, so the
 /// suggestion is prefixed with `sudo` there.
-pub fn manual_mount_command(platform: MountPlatform, port: u16, target: &str) -> String {
-    let argv = mount_argv(platform, port, target);
+pub fn manual_mount_command(
+    platform: MountPlatform,
+    port: u16,
+    target: &str,
+    read_only: bool,
+) -> String {
+    let argv = mount_argv(platform, port, target, read_only);
     let rendered = argv
         .iter()
         .map(|arg| shell_quote(arg))
@@ -142,13 +157,18 @@ mod tests {
 
     #[test]
     fn macos_mount_uses_nolocks_and_both_ports() {
-        let argv = mount_argv(MountPlatform::MacOs, 51234, "/Users/me/CloudMounts/photos");
+        let argv = mount_argv(
+            MountPlatform::MacOs,
+            51234,
+            "/Users/me/CloudMounts/photos",
+            false,
+        );
         assert_eq!(
             argv,
             vec![
                 "/sbin/mount_nfs",
                 "-o",
-                "nolocks,vers=3,tcp,rsize=131072,actimeo=120,port=51234,mountport=51234",
+                "nolocks,vers=3,tcp,rsize=131072,wsize=131072,actimeo=120,port=51234,mountport=51234",
                 "localhost:/",
                 "/Users/me/CloudMounts/photos",
             ]
@@ -157,7 +177,7 @@ mod tests {
 
     #[test]
     fn linux_mount_requests_user_mount() {
-        let argv = mount_argv(MountPlatform::Linux, 9, "/mnt/photos");
+        let argv = mount_argv(MountPlatform::Linux, 9, "/mnt/photos", false);
         assert_eq!(argv[0], "mount.nfs");
         assert!(argv[2].starts_with("user,noacl,nolock,"));
         assert!(argv[2].ends_with("port=9,mountport=9"));
@@ -166,8 +186,42 @@ mod tests {
     }
 
     #[test]
+    fn a_read_only_mount_is_marked_ro_for_the_client() {
+        // The client greys out what it knows it cannot do; without `ro` the user
+        // gets an I/O error at the end of a copy instead.
+        let macos = mount_argv(MountPlatform::MacOs, 1, "/tmp/m", true);
+        assert_eq!(
+            macos[2],
+            "nolocks,ro,vers=3,tcp,rsize=131072,wsize=131072,actimeo=120,port=1,mountport=1"
+        );
+
+        let linux = mount_argv(MountPlatform::Linux, 1, "/tmp/m", true);
+        assert_eq!(
+            linux[2],
+            "user,noacl,nolock,ro,vers=3,tcp,rsize=131072,wsize=131072,actimeo=120,port=1,mountport=1"
+        );
+
+        // A writable mount says nothing about access at all.
+        assert!(!mount_argv(MountPlatform::MacOs, 1, "/tmp/m", false)[2].contains("ro,"));
+        assert!(!mount_argv(MountPlatform::Linux, 1, "/tmp/m", false)[2].contains(",ro,"));
+    }
+
+    #[test]
+    fn writes_are_sized_like_reads() {
+        // Without wsize the client falls back to a much smaller write size and
+        // a copy turns into many more round trips than it needs.
+        for read_only in [true, false] {
+            for platform in [MountPlatform::MacOs, MountPlatform::Linux] {
+                let argv = mount_argv(platform, 1, "/tmp/m", read_only);
+                assert!(argv[2].contains("rsize=131072"), "{}", argv[2]);
+                assert!(argv[2].contains("wsize=131072"), "{}", argv[2]);
+            }
+        }
+    }
+
+    #[test]
     fn windows_mount_targets_the_loopback_unc_share() {
-        let argv = mount_argv(MountPlatform::Windows, 2049, "Z:");
+        let argv = mount_argv(MountPlatform::Windows, 2049, "Z:", false);
         assert_eq!(
             argv,
             vec![
@@ -193,17 +247,25 @@ mod tests {
 
     #[test]
     fn manual_command_is_sudo_prefixed_only_on_linux() {
-        let linux = manual_mount_command(MountPlatform::Linux, 42, "/mnt/photos");
+        let linux = manual_mount_command(MountPlatform::Linux, 42, "/mnt/photos", false);
         assert!(linux.starts_with("sudo mount.nfs -o "));
 
-        let macos = manual_mount_command(MountPlatform::MacOs, 42, "/tmp/m");
+        let macos = manual_mount_command(MountPlatform::MacOs, 42, "/tmp/m", false);
         assert!(macos.starts_with("/sbin/mount_nfs -o "));
         assert!(!macos.contains("sudo"));
     }
 
     #[test]
+    fn the_manual_command_mounts_the_mode_that_was_asked_for() {
+        // The user runs this by hand after an automatic mount failed, so it has
+        // to reproduce the same mount, not a writable one.
+        let read_only = manual_mount_command(MountPlatform::MacOs, 42, "/tmp/m", true);
+        assert!(read_only.contains(",ro,"), "{}", read_only);
+    }
+
+    #[test]
     fn manual_command_quotes_paths_with_spaces() {
-        let cmd = manual_mount_command(MountPlatform::MacOs, 1, "/Users/me/My Drive");
+        let cmd = manual_mount_command(MountPlatform::MacOs, 1, "/Users/me/My Drive", false);
         assert!(cmd.ends_with("'/Users/me/My Drive'"), "{}", cmd);
     }
 

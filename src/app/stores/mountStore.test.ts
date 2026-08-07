@@ -25,12 +25,21 @@ mock.module('@tauri-apps/api/core', () => ({
   invoke: (cmd: string, args?: InvokeArgs) => handleInvoke(cmd, args),
 }));
 
+type ListenFn = (event: string, handler: EventHandler) => Promise<() => void>;
+
+const recordingListen: ListenFn = async (event, handler) => {
+  listenCalls += 1;
+  eventHandlers[event] = handler;
+  return () => {
+    delete eventHandlers[event];
+  };
+};
+
+// Swappable so one test can fail a single registration mid-setup.
+let listenImpl: ListenFn = recordingListen;
+
 mock.module('@tauri-apps/api/event', () => ({
-  listen: async (event: string, handler: EventHandler) => {
-    listenCalls += 1;
-    eventHandlers[event] = handler;
-    return () => delete eventHandlers[event];
-  },
+  listen: (event: string, handler: EventHandler) => listenImpl(event, handler),
 }));
 
 // Import after the mocks are registered so the store binds to the fakes.
@@ -41,7 +50,12 @@ const {
   isBucketMounted,
   toMountInfo,
   defaultMountPath,
+  flushErrorKey,
+  flushErrorMessage,
+  shouldReportFlushError,
+  FLUSH_ERROR_QUIET_MS,
 } = await import('./mountStore');
+const { useToastStore } = await import('./toastStore');
 
 function payload(overrides: Record<string, unknown> = {}) {
   return {
@@ -239,6 +253,34 @@ describe('unmount', () => {
   });
 });
 
+describe('listener registration failure', () => {
+  /**
+   * Must be the first test that calls setup: the module refuses to subscribe
+   * twice, so only the first call reaches the registration path at all.
+   */
+  test('rolls back a partial registration so a retry starts from zero', async () => {
+    listenImpl = async (event, handler) => {
+      if (event === 'mount-flush-error') {
+        listenCalls += 1;
+        throw new Error('listen failed');
+      }
+      return recordingListen(event, handler);
+    };
+
+    try {
+      await setupGlobalMountListeners();
+    } finally {
+      listenImpl = recordingListen;
+    }
+
+    // `mount-changed` registered before the failure — it must not survive, or a
+    // retry would leave two subscriptions delivering every event twice. The
+    // next describe is that retry: it subscribes and loads from scratch.
+    expect(eventHandlers['mount-changed']).toBeUndefined();
+    expect(eventHandlers['mount-flush-error']).toBeUndefined();
+  });
+});
+
 describe('mount-changed subscription', () => {
   test('setup loads the current list and then follows the event', async () => {
     handleInvoke = async (cmd) => (cmd === 'list_mounts' ? [payload()] : undefined);
@@ -272,8 +314,73 @@ describe('mount-changed subscription', () => {
     const before = listenCalls;
     await setupGlobalMountListeners();
 
+    // A delta, not an absolute: earlier tests in this file also call setup.
     expect(listenCalls).toBe(before);
-    expect(before).toBe(1);
+    expect(typeof eventHandlers['mount-changed']).toBe('function');
+    expect(typeof eventHandlers['mount-flush-error']).toBe('function');
+  });
+});
+
+describe('flush-error reporting', () => {
+  const event = {
+    mount_id: 'm-1',
+    bucket: 'photos',
+    key: 'trips/iceland.raw',
+    error: 'connection reset',
+  };
+
+  test('names the file, the bucket and the reason', () => {
+    expect(flushErrorMessage(event)).toBe(
+      'Upload of "trips/iceland.raw" to photos failed: connection reset'
+    );
+  });
+
+  test('the same key in two mounts is two different files', () => {
+    expect(flushErrorKey(event)).not.toBe(flushErrorKey({ ...event, mount_id: 'm-2' }));
+    expect(flushErrorKey(event)).toBe(flushErrorKey({ ...event, error: 'timed out' }));
+  });
+
+  describe('shouldReportFlushError', () => {
+    test('reports a file once, then stays quiet until the window passes', () => {
+      const reported = new Map<string, number>();
+
+      expect(shouldReportFlushError(reported, 'a', 0)).toBe(true);
+      expect(shouldReportFlushError(reported, 'a', 1_000)).toBe(false);
+      expect(shouldReportFlushError(reported, 'a', FLUSH_ERROR_QUIET_MS - 1)).toBe(false);
+      expect(shouldReportFlushError(reported, 'a', FLUSH_ERROR_QUIET_MS)).toBe(true);
+    });
+
+    test('keeps a separate window per file', () => {
+      const reported = new Map<string, number>();
+
+      expect(shouldReportFlushError(reported, 'a', 0)).toBe(true);
+      expect(shouldReportFlushError(reported, 'b', 0)).toBe(true);
+      expect(shouldReportFlushError(reported, 'b', 100)).toBe(false);
+    });
+
+    test('forgets files that have gone quiet instead of growing forever', () => {
+      const reported = new Map<string, number>();
+      shouldReportFlushError(reported, 'a', 0);
+      shouldReportFlushError(reported, 'b', 0);
+
+      shouldReportFlushError(reported, 'c', FLUSH_ERROR_QUIET_MS * 2);
+
+      expect([...reported.keys()]).toEqual(['c']);
+    });
+  });
+
+  test('a flush-error event raises one toast, and a repeat within the window raises none', async () => {
+    await setupGlobalMountListeners();
+    useToastStore.setState({ toasts: [] });
+
+    expect(typeof eventHandlers['mount-flush-error']).toBe('function');
+    eventHandlers['mount-flush-error']({ payload: event });
+    eventHandlers['mount-flush-error']({ payload: event });
+
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.length).toBe(1);
+    expect(toasts[0].kind).toBe('error');
+    expect(toasts[0].text).toBe(flushErrorMessage(event));
   });
 });
 

@@ -38,8 +38,10 @@
   - Pause/Resume/Cancel individual or all transfers
   - Background processing - queue continues even when modal is closed
   - Automatic queue continuation after each transfer completes
-- **Mount as Local Drive** - Mount any bucket to a local folder and browse it in Finder / Explorer:
-  - Read-only NFS mount served by the app itself — no macFUSE, WinFsp, or kernel extensions
+- **Mount as Local Drive** - Mount any bucket to a local folder and work with it in Finder / Explorer:
+  - Read-write by default — save, rename, and delete files right in the folder; a per-mount toggle makes it read-only
+  - NFS mount served by the app itself — no macFUSE, WinFsp, or kernel extensions
+  - Manage every active mount from Settings → Mounts
   - Works with all providers (R2, AWS S3, MinIO, RustFS)
   - macOS mounts instantly with no extra software; Linux needs nfs-utils; Windows support is planned
   - All mounts are removed automatically when the app quits
@@ -230,14 +232,21 @@ Transfers are queued (up to 5 concurrent), and same-provider transfers prefer se
 
 ### Mounting a Bucket as a Local Drive
 
-Mount any bucket to a local folder and browse it like a normal disk (read-only in this release):
+Mount any bucket to a local folder and work with it like a normal disk:
 
 1. Open the bucket's menu in the sidebar (⋯) → Mount as local drive.
-2. Pick a local folder (defaults to `~/CloudMounts/<bucket>`), then click Mount.
-3. Browse the bucket in Finder / your file manager; open and copy files like local ones.
-4. Unmount from the same menu or the mount dialog. All mounts are removed when the app quits.
+2. Pick a local folder (defaults to `~/CloudMounts/<bucket>`). Mounts are writable by default — turn off "Allow changes" for a read-only mount.
+3. Use the folder in Finder / your file manager: open, copy, save, rename, and delete files. Changes upload to the bucket in the background a moment after you finish writing.
+4. Manage active mounts in Settings → Mounts (reveal, unmount), or from the bucket menu. All mounts are removed when the app quits.
 
-How it works: the app runs a small read-only NFSv3 server on `127.0.0.1` and mounts it with your OS's built-in NFS client — no macFUSE, WinFsp, or kernel extensions required. Note: like any local mount, while a bucket is mounted its files are readable by other apps on your machine; the server is never reachable from the network.
+How it works: the app runs a small NFSv3 server on `127.0.0.1` and mounts it with your OS's built-in NFS client — no macFUSE, WinFsp, or kernel extensions required. Renaming or moving files inside a mount is done server-side in the bucket (no re-upload), the same way the app's own move works. Note: like any local mount, while a bucket is mounted its files are readable — and, for writable mounts, changeable — by other apps on your machine; the server is never reachable from the network.
+
+Good to know for writable mounts:
+
+- Uploads finish in the background — keep the app running until they do. Unmounting waits for pending uploads; quitting mid-upload keeps the unsent file in the app's cache folder and logs its location.
+- Deletes and overwrites in the folder are real bucket operations.
+- macOS writes its usual `.DS_Store` and `._*` helper files into the folder, so they end up in the bucket too.
+- Moving files between two mounted buckets streams the data through your machine (an NFSv3 limit) — for large transfers across buckets, the app's Batch Move is much faster because it copies server-side.
 
 Platform notes:
 
