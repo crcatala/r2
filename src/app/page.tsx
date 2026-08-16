@@ -100,6 +100,7 @@ export default function Home() {
   const searchInputRef = useRef<InputRef | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [focusedItem, setFocusedItem] = useState<FileItem | null>(null);
+  const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showInspector = useThemeStore((s) => s.showInspector);
   const setShowInspector = useThemeStore((s) => s.setShowInspector);
 
@@ -545,16 +546,44 @@ export default function Home() {
 
   const handleItemClick = useCallback(
     (item: FileItem) => {
+      if (singleClickTimerRef.current) {
+        clearTimeout(singleClickTimerRef.current);
+        singleClickTimerRef.current = null;
+      }
+
       if (item.isFolder) {
         setCurrentPath(item.key);
         setSearchQuery('');
         clearSelection();
       } else {
-        openPreview(item, filteredItems);
+        // Wait briefly so a double-click can open the modal without the newly
+        // opened inspector intercepting the second click.
+        singleClickTimerRef.current = setTimeout(() => {
+          setFocusedItem(item);
+          setShowInspector(true);
+          singleClickTimerRef.current = null;
+        }, 250);
       }
     },
-    [clearSelection, openPreview, filteredItems]
+    [clearSelection, setShowInspector]
   );
+
+  const handleItemDoubleClick = useCallback(
+    (item: FileItem) => {
+      if (singleClickTimerRef.current) {
+        clearTimeout(singleClickTimerRef.current);
+        singleClickTimerRef.current = null;
+      }
+      if (!item.isFolder) openPreview(item, filteredItems);
+    },
+    [openPreview, filteredItems]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (singleClickTimerRef.current) clearTimeout(singleClickTimerRef.current);
+    };
+  }, []);
 
   const selectAll = useCallback(() => {
     const allKeys = filteredItems.map((item) => item.key);
@@ -1145,6 +1174,7 @@ export default function Home() {
                   modifiedSort={modifiedSort}
                   showFullPath={!!searchQuery.trim()}
                   onItemClick={handleItemClick}
+                  onItemDoubleClick={handleItemDoubleClick}
                   onToggleSelection={toggleSelection}
                   onSelectAll={selectAll}
                   onClearSelection={clearSelection}
@@ -1157,12 +1187,12 @@ export default function Home() {
                   onFolderDelete={handleFolderDelete}
                   onFolderDownload={handleFolderDownload}
                   onFolderRename={handleFolderRenameClick}
-                  onFocus={setFocusedItem}
                 />
               ) : (
                 <FileGridView
                   items={filteredItems}
                   onItemClick={handleItemClick}
+                  onItemDoubleClick={handleItemDoubleClick}
                   onDelete={handleDelete}
                   onRename={handleRenameClick}
                   onDownload={handleDownload}
@@ -1174,7 +1204,6 @@ export default function Home() {
                   selectedKeys={selectedKeys}
                   onToggleSelection={toggleSelection}
                   showFullPath={!!searchQuery.trim()}
-                  onFocus={setFocusedItem}
                 />
               )}
 

@@ -42,6 +42,7 @@ interface FileListRowProps {
   showFullPath: boolean;
   folderMeta?: FolderMetadata;
   onItemClick: (item: FileItem) => void;
+  onItemDoubleClick: (item: FileItem) => void;
   onToggleSelection: (key: string) => void;
   onDownload?: (item: FileItem) => void;
   onRename: (item: FileItem) => void;
@@ -152,6 +153,7 @@ export default function FileListRow({
   showFullPath,
   folderMeta,
   onItemClick,
+  onItemDoubleClick,
   onToggleSelection,
   onDownload,
   onRename,
@@ -199,9 +201,17 @@ export default function FileListRow({
   const iconSize = density === 'compact' ? 11 : density === 'cozy' ? 15 : 13;
 
   return (
-    <div className={rowClass} onClick={() => onItemClick(item)}>
+    <div
+      className={rowClass}
+      onClick={() => onItemClick(item)}
+      onDoubleClick={() => onItemDoubleClick(item)}
+    >
       {/* Checkbox cell */}
-      <div className="fl-cell" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="fl-cell"
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
         <FlCheckbox
           checked={isSelected}
           onClick={(e) => {
@@ -233,6 +243,7 @@ export default function FileListRow({
         className="fl-cell"
         style={{ justifyContent: 'flex-end' }}
         onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
       >
         <div className="fl-actions">
           {item.isFolder ? (

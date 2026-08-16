@@ -185,6 +185,7 @@ interface FileGridTileProps {
   isSelected: boolean;
   showFullPath?: boolean;
   onItemClick: (item: FileItem) => void;
+  onItemDoubleClick: (item: FileItem) => void;
   onToggleSelection: (key: string) => void;
   onDelete: (item: FileItem) => void;
   onRename: (item: FileItem) => void;
@@ -202,6 +203,7 @@ const FileGridTile = memo(function FileGridTile({
   isSelected,
   showFullPath,
   onItemClick,
+  onItemDoubleClick,
   onToggleSelection,
   onDelete,
   onRename,
@@ -220,6 +222,10 @@ const FileGridTile = memo(function FileGridTile({
     if (onFocus) onFocus(item);
     onItemClick(item);
   }, [onItemClick, onFocus, item]);
+
+  const handleDoubleClick = useCallback(() => {
+    onItemDoubleClick(item);
+  }, [onItemDoubleClick, item]);
 
   const handleCheckClick = useCallback(
     (e: React.MouseEvent) => {
@@ -255,9 +261,14 @@ const FileGridTile = memo(function FileGridTile({
       <div
         className={['fg-tile', isSelected ? 'selected' : ''].filter(Boolean).join(' ')}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
       >
         {/* Checkbox overlay */}
-        <div className="fg-tile-check" onClick={handleCheckClick}>
+        <div
+          className="fg-tile-check"
+          onClick={handleCheckClick}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
           <div className={['fl-checkbox', isSelected ? 'checked' : ''].filter(Boolean).join(' ')}>
             {isSelected && <CheckOutlined style={{ fontSize: 8 }} />}
           </div>

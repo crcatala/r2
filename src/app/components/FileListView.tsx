@@ -39,6 +39,7 @@ interface FileListViewProps {
   modifiedSort: SortOrder;
   showFullPath?: boolean;
   onItemClick: (item: FileItem) => void;
+  onItemDoubleClick: (item: FileItem) => void;
   onToggleSelection: (key: string) => void;
   onSelectAll: () => void;
   onClearSelection: () => void;
@@ -112,6 +113,7 @@ export default function FileListView({
   modifiedSort,
   showFullPath = false,
   onItemClick,
+  onItemDoubleClick,
   onToggleSelection,
   onSelectAll,
   onClearSelection,
@@ -208,6 +210,7 @@ export default function FileListView({
                   if (onFocus) onFocus(i);
                   onItemClick(i);
                 }}
+                onItemDoubleClick={onItemDoubleClick}
                 onToggleSelection={onToggleSelection}
                 onDownload={onDownload}
                 onRename={onRename}
