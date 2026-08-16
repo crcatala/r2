@@ -334,6 +334,31 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
         <button className="btn" onClick={handleCopyUrl} disabled={!fileUrl}>
           <CopyOutlined /> Copy URL
         </button>
+        {signedUrlExpiresAt && fileUrl && !isPublic && config && (
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              color: 'var(--text-muted)',
+              fontSize: 11.5,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span>URL expires in {formatTimeRemaining(signedUrlExpiresAt, now)}</span>
+            <button
+              className="btn"
+              onClick={() => {
+                signedUrlCache.delete(signedUrlCacheKey(config, file.key));
+                setSignedUrl(null);
+                setSignedUrlExpiresAt(null);
+                setRegenerationNonce((value) => value + 1);
+              }}
+            >
+              Generate fresh URL
+            </button>
+          </span>
+        )}
       </span>
 
       {/* Navigation */}
@@ -459,35 +484,6 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
         </p>
       )}
 
-      {signedUrlExpiresAt && fileUrl && !isPublic && config && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            marginTop: 12,
-            color: 'var(--text-muted)',
-            fontSize: 11.5,
-          }}
-        >
-          <span>
-            Signed URL already generated · expires in{' '}
-            {formatTimeRemaining(signedUrlExpiresAt, now)}
-          </span>
-          <button
-            className="btn"
-            onClick={() => {
-              signedUrlCache.delete(signedUrlCacheKey(config, file.key));
-              setSignedUrl(null);
-              setSignedUrlExpiresAt(null);
-              setRegenerationNonce((value) => value + 1);
-            }}
-          >
-            Generate fresh URL
-          </button>
-        </div>
-      )}
     </Modal>
   );
 }

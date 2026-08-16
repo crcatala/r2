@@ -2768,12 +2768,14 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 14px 22px 18px;
   border-top: 1px solid var(--border);
 }
 .modal-footer .left {
   margin-right: auto;
+  flex-wrap: wrap;
 }
 
 /* ── Form fields (handoff) ── */
