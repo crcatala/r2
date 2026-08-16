@@ -2267,7 +2267,6 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 }
 .fl-row.focused > .fl-cell {
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .fl-name {
