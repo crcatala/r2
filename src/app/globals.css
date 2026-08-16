@@ -2181,16 +2181,23 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 
 /* File area */
 .file-area {
-  position: relative;
-  overflow: auto;
+  display: flex;
+  overflow: hidden;
   background: var(--bg-app);
   min-height: 0;
+}
+
+.file-browser-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ── List view ── */
 .file-list {
   display: grid;
-  grid-template-columns: 28px minmax(280px, 1fr) 110px 160px 70px;
+  grid-template-columns: 28px minmax(120px, 1fr) 80px 110px 60px;
   width: 100%;
 }
 .file-list .col-h {
@@ -2257,6 +2264,9 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 }
 .fl-row.selected:hover > .fl-cell {
   background: var(--accent-soft-hover);
+}
+.fl-row.focused > .fl-cell {
+  background: var(--accent-soft);
 }
 
 .fl-name {
@@ -2449,6 +2459,10 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.fg-tile.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
 .fg-thumb {
   width: 100%;
   aspect-ratio: 4/3;
@@ -2532,11 +2546,10 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 
 /* ── Inspector ── */
 .inspector {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 320px;
+  position: relative;
+  flex: 0 0 clamp(240px, 28vw, 320px);
+  width: clamp(240px, 28vw, 320px);
+  height: 100%;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   display: flex;
@@ -2754,12 +2767,14 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 14px 22px 18px;
   border-top: 1px solid var(--border);
 }
 .modal-footer .left {
   margin-right: auto;
+  flex-wrap: wrap;
 }
 
 /* ── Form fields (handoff) ── */

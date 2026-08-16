@@ -100,6 +100,7 @@ export default function Home() {
   const searchInputRef = useRef<InputRef | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [focusedItem, setFocusedItem] = useState<FileItem | null>(null);
+  const singleClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showInspector = useThemeStore((s) => s.showInspector);
   const setShowInspector = useThemeStore((s) => s.setShowInspector);
 
@@ -160,8 +161,17 @@ export default function Home() {
     );
   }, [config]);
 
-  // Reset path to root when bucket changes
+  // Reset path and any pending/active Inspector selection when the storage
+  // context changes. This prevents a delayed single-click from applying to a
+  // file from the previous account or bucket.
   useEffect(() => {
+    if (singleClickTimerRef.current) {
+      clearTimeout(singleClickTimerRef.current);
+      singleClickTimerRef.current = null;
+    }
+    setFocusedItem(null);
+    setShowInspector(false);
+
     resetCurrentPath();
     setSearchQuery('');
     resetBatchOperation();
@@ -169,8 +179,10 @@ export default function Home() {
     currentConfig?.bucket,
     currentConfig?.account_id,
     currentConfig?.provider,
+    currentConfig?.token_id,
     resetBatchOperation,
     resetCurrentPath,
+    setShowInspector,
   ]);
 
   // Load download tasks from database when bucket changes
@@ -545,16 +557,77 @@ export default function Home() {
 
   const handleItemClick = useCallback(
     (item: FileItem) => {
+      if (singleClickTimerRef.current) {
+        clearTimeout(singleClickTimerRef.current);
+        singleClickTimerRef.current = null;
+      }
+
       if (item.isFolder) {
+        setFocusedItem(null);
+        setShowInspector(false);
         setCurrentPath(item.key);
         setSearchQuery('');
         clearSelection();
       } else {
+        // Wait briefly so a double-click can open the modal without the newly
+        // opened inspector intercepting the second click.
+        singleClickTimerRef.current = setTimeout(() => {
+          setFocusedItem(item);
+          setShowInspector(true);
+          singleClickTimerRef.current = null;
+        }, 250);
+      }
+    },
+    [clearSelection, setShowInspector]
+  );
+
+  const handleItemDoubleClick = useCallback(
+    (item: FileItem) => {
+      if (singleClickTimerRef.current) {
+        clearTimeout(singleClickTimerRef.current);
+        singleClickTimerRef.current = null;
+      }
+      if (!item.isFolder) {
+        setFocusedItem(null);
+        setShowInspector(false);
         openPreview(item, filteredItems);
       }
     },
-    [clearSelection, openPreview, filteredItems]
+    [openPreview, filteredItems, setShowInspector]
   );
+
+  useEffect(() => {
+    function handleInspectorKeyDown(event: KeyboardEvent) {
+      if (!focusedItem || !showInspector || previewFile) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+      const index = filteredItems.findIndex((item) => item.key === focusedItem.key);
+      if (index === -1) return;
+      const nextIndex = Math.max(
+        0,
+        Math.min(
+          filteredItems.length - 1,
+          index + (event.key === 'ArrowDown' ? 1 : -1)
+        )
+      );
+      if (nextIndex === index) return;
+
+      event.preventDefault();
+      setFocusedItem(filteredItems[nextIndex]);
+      setShowInspector(true);
+    }
+
+    window.addEventListener('keydown', handleInspectorKeyDown);
+    return () => window.removeEventListener('keydown', handleInspectorKeyDown);
+  }, [filteredItems, focusedItem, previewFile, setShowInspector, showInspector]);
+
+  useEffect(() => {
+    return () => {
+      if (singleClickTimerRef.current) clearTimeout(singleClickTimerRef.current);
+    };
+  }, []);
 
   const selectAll = useCallback(() => {
     const allKeys = filteredItems.map((item) => item.key);
@@ -1120,8 +1193,9 @@ export default function Home() {
             )}
 
             {/* File area */}
-            <div className="file-area" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-              {!config ? (
+            <div className="file-area" style={{ flex: 1, minHeight: 0 }}>
+              <div className="file-browser-content">
+                {!config ? (
                 <EmptyState onUpload={() => setUploadModalOpen(true)} />
               ) : lastSyncTime === null && (isSyncing || syncPhase !== 'idle') ? (
                 /* Show sync overlay during initial sync (before cache is ready) */
@@ -1144,7 +1218,9 @@ export default function Home() {
                   sizeSort={sizeSort}
                   modifiedSort={modifiedSort}
                   showFullPath={!!searchQuery.trim()}
+                  focusedKey={focusedItem?.key}
                   onItemClick={handleItemClick}
+                  onItemDoubleClick={handleItemDoubleClick}
                   onToggleSelection={toggleSelection}
                   onSelectAll={selectAll}
                   onClearSelection={clearSelection}
@@ -1157,12 +1233,12 @@ export default function Home() {
                   onFolderDelete={handleFolderDelete}
                   onFolderDownload={handleFolderDownload}
                   onFolderRename={handleFolderRenameClick}
-                  onFocus={setFocusedItem}
                 />
               ) : (
                 <FileGridView
                   items={filteredItems}
                   onItemClick={handleItemClick}
+                  onItemDoubleClick={handleItemDoubleClick}
                   onDelete={handleDelete}
                   onRename={handleRenameClick}
                   onDownload={handleDownload}
@@ -1172,11 +1248,12 @@ export default function Home() {
                   storageConfig={config}
                   folderSizes={metadata}
                   selectedKeys={selectedKeys}
+                  focusedKey={focusedItem?.key}
                   onToggleSelection={toggleSelection}
                   showFullPath={!!searchQuery.trim()}
-                  onFocus={setFocusedItem}
                 />
-              )}
+                )}
+              </div>
 
               {/* Inspector right-rail */}
               {showInspector && focusedItem && (

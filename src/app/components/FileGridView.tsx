@@ -9,6 +9,7 @@ import FileGridTile from '@/app/components/FileGridTile';
 interface FileGridViewProps {
   items: FileItem[];
   onItemClick: (item: FileItem) => void;
+  onItemDoubleClick: (item: FileItem) => void;
   onDelete: (item: FileItem) => void;
   onRename: (item: FileItem) => void;
   onDownload?: (item: FileItem) => void;
@@ -18,6 +19,7 @@ interface FileGridViewProps {
   storageConfig?: StorageConfig | null;
   folderSizes?: Record<string, FolderMetadata>;
   selectedKeys?: Set<string>;
+  focusedKey?: string;
   onToggleSelection?: (key: string) => void;
   showFullPath?: boolean;
   onFocus?: (item: FileItem) => void;
@@ -71,6 +73,7 @@ const GridItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>
 export default memo(function FileGridView({
   items,
   onItemClick,
+  onItemDoubleClick,
   onDelete,
   onRename,
   onDownload,
@@ -80,6 +83,7 @@ export default memo(function FileGridView({
   storageConfig,
   folderSizes,
   selectedKeys,
+  focusedKey,
   onToggleSelection,
   showFullPath,
   onFocus,
@@ -111,8 +115,10 @@ export default memo(function FileGridView({
           storageConfig={storageConfig}
           folderMetadata={item.isFolder ? folderSizes?.[item.key] : undefined}
           isSelected={selectedKeys?.has(item.key) ?? false}
+          isFocused={focusedKey === item.key}
           showFullPath={showFullPath}
           onItemClick={onItemClick}
+          onItemDoubleClick={onItemDoubleClick}
           onToggleSelection={onToggleSelection ?? (() => undefined)}
           onDelete={onDelete}
           onRename={onRename}

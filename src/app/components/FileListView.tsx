@@ -33,12 +33,14 @@ interface FolderMetadata {
 interface FileListViewProps {
   items: FileItem[];
   selectedKeys: Set<string>;
+  focusedKey?: string;
   metadata: Record<string, FolderMetadata>;
   nameSort: SortOrder;
   sizeSort: SortOrder;
   modifiedSort: SortOrder;
   showFullPath?: boolean;
   onItemClick: (item: FileItem) => void;
+  onItemDoubleClick: (item: FileItem) => void;
   onToggleSelection: (key: string) => void;
   onSelectAll: () => void;
   onClearSelection: () => void;
@@ -55,7 +57,7 @@ interface FileListViewProps {
   onFocus?: (item: FileItem) => void;
 }
 
-const GRID_COLS = '28px minmax(280px, 1fr) 110px 160px 70px';
+const GRID_COLS = '28px minmax(120px, 1fr) 80px 110px 60px';
 
 /** Sort arrow indicator */
 function SortArrow({ order }: { order: SortOrder }) {
@@ -106,12 +108,14 @@ const VirtuosoItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElem
 export default function FileListView({
   items,
   selectedKeys,
+  focusedKey,
   metadata,
   nameSort,
   sizeSort,
   modifiedSort,
   showFullPath = false,
   onItemClick,
+  onItemDoubleClick,
   onToggleSelection,
   onSelectAll,
   onClearSelection,
@@ -201,6 +205,7 @@ export default function FileListView({
               <FileListRow
                 item={item}
                 isSelected={selectedKeys.has(item.key)}
+                isFocused={focusedKey === item.key}
                 density={density}
                 showFullPath={showFullPath}
                 folderMeta={folderMeta}
@@ -208,6 +213,7 @@ export default function FileListView({
                   if (onFocus) onFocus(i);
                   onItemClick(i);
                 }}
+                onItemDoubleClick={onItemDoubleClick}
                 onToggleSelection={onToggleSelection}
                 onDownload={onDownload}
                 onRename={onRename}

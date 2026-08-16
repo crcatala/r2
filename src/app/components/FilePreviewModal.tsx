@@ -37,6 +37,8 @@ const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ic
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogv', 'mov', 'm4v'];
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'];
 const PDF_EXTENSIONS = ['pdf'];
+const SIGNED_URL_TTL_MS = 60 * 60 * 1000;
+const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 const TEXT_CONTENT_TYPES: Record<string, string> = {
   js: 'application/javascript',
@@ -89,6 +91,18 @@ function isTextFile(f: string) {
   return TEXT_EXTENSIONS.includes(getExt(f));
 }
 
+function signedUrlCacheKey(config: StorageConfig, key: string): string {
+  return [config.provider, config.accountId, config.bucket, key].join('::');
+}
+
+function formatTimeRemaining(expiresAt: number, now: number): string {
+  const seconds = Math.max(0, Math.ceil((expiresAt - now) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.ceil(minutes / 60)}h`;
+}
+
 function fileTypeIcon(filename: string, size = 18): React.ReactNode {
   if (isImageFile(filename)) return <FileImageOutlined style={{ fontSize: size }} />;
   if (isVideoFile(filename)) return <PlaySquareOutlined style={{ fontSize: size }} />;
@@ -109,7 +123,10 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
   const { file, files, close, navigate } = usePreviewStore();
   const isOpen = !!file;
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [signedUrlExpiresAt, setSignedUrlExpiresAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [regenerationNonce, setRegenerationNonce] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
@@ -154,6 +171,13 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, previewableFiles.length, navigate]);
 
+  useEffect(() => {
+    if (!signedUrlExpiresAt) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [signedUrlExpiresAt]);
+
   const hasCredentials = hasSigningCredentials(config);
   const isPublic = isBucketPublic(config);
   const needsCredentials = !isPublic && !hasCredentials;
@@ -175,8 +199,10 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
   );
 
   useEffect(() => {
+    let cancelled = false;
     if (!isOpen || !file) {
       setSignedUrl(null);
+      setSignedUrlExpiresAt(null);
       return;
     }
 
@@ -184,21 +210,49 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
       // Public bucket: reuse the provider's URL builder so the object key is
       // encoded consistently (spaces, unicode, reserved characters) — no signing.
       setSignedUrl(buildPublicUrl(config, file.key));
+      setSignedUrlExpiresAt(null);
       return;
     }
 
     if (config && hasCredentials) {
-      // Private bucket: auto-sign the URL for the preview.
+      setSignedUrl(null);
+      setSignedUrlExpiresAt(null);
+      const cacheKey = signedUrlCacheKey(config, file.key);
+      const cached = signedUrlCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        setSignedUrl(cached.url);
+        setSignedUrlExpiresAt(cached.expiresAt);
+        setLoading(false);
+        return;
+      }
+
+      // Private bucket: reuse an unexpired URL, or generate a fresh one when
+      // opening a new file or explicitly regenerating it.
       setLoading(true);
       generateSignedUrl(config, file.key)
-        .then(setSignedUrl)
-        .catch(() => setSignedUrl(null))
-        .finally(() => setLoading(false));
-      return;
+        .then((url) => {
+          if (cancelled) return;
+          const expiresAt = Date.now() + SIGNED_URL_TTL_MS;
+          signedUrlCache.set(cacheKey, { url, expiresAt });
+          setSignedUrl(url);
+          setSignedUrlExpiresAt(expiresAt);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSignedUrl(null);
+          setSignedUrlExpiresAt(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
     }
 
     setSignedUrl(null);
-  }, [isOpen, file, config, hasCredentials, isPublic]);
+    setSignedUrlExpiresAt(null);
+  }, [isOpen, file, config, hasCredentials, isPublic, regenerationNonce]);
 
   if (!file) return null;
 
@@ -217,10 +271,12 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
     return 1100;
   };
 
-  const getPreviewMaxHeight = () => {
+  const getPreviewHeight = () => {
     const height = windowSize.height || (typeof window !== 'undefined' ? window.innerHeight : 768);
-    return `${Math.min(height * 0.55, 700)}px`;
+    return Math.min(Math.max(height * 0.45, 220), 560);
   };
+
+  const getPreviewMaxHeight = () => `${getPreviewHeight()}px`;
 
   async function handleCopyUrl() {
     if (!fileUrl) {
@@ -278,6 +334,31 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
         <button className="btn" onClick={handleCopyUrl} disabled={!fileUrl}>
           <CopyOutlined /> Copy URL
         </button>
+        {signedUrlExpiresAt && fileUrl && !isPublic && config && (
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              color: 'var(--text-muted)',
+              fontSize: 11.5,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span>URL expires in {formatTimeRemaining(signedUrlExpiresAt, now)}</span>
+            <button
+              className="btn"
+              onClick={() => {
+                signedUrlCache.delete(signedUrlCacheKey(config, file.key));
+                setSignedUrl(null);
+                setSignedUrlExpiresAt(null);
+                setRegenerationNonce((value) => value + 1);
+              }}
+            >
+              Generate fresh URL
+            </button>
+          </span>
+        )}
       </span>
 
       {/* Navigation */}
@@ -312,11 +393,21 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
       title={file.name}
       subtitle={subtitle}
       icon={fileTypeIcon(file.name)}
-      width={typeof modalWidth === 'number' ? modalWidth : undefined}
+      width={modalWidth}
       footer={footer}
     >
       {/* Preview area */}
-      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+      <div
+        style={{
+          height: getPreviewHeight(),
+          textAlign: 'center',
+          marginBottom: 16,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+        }}
+      >
         {loading ? (
           <Spin />
         ) : isImage && fileUrl ? (
@@ -392,6 +483,7 @@ export default function FilePreviewModal({ config, onFileUpdated }: FilePreviewM
           Unable to generate file URL
         </p>
       )}
+
     </Modal>
   );
 }
