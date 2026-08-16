@@ -19,6 +19,7 @@ interface FileGridViewProps {
   storageConfig?: StorageConfig | null;
   folderSizes?: Record<string, FolderMetadata>;
   selectedKeys?: Set<string>;
+  focusedKey?: string;
   onToggleSelection?: (key: string) => void;
   showFullPath?: boolean;
   onFocus?: (item: FileItem) => void;
@@ -82,6 +83,7 @@ export default memo(function FileGridView({
   storageConfig,
   folderSizes,
   selectedKeys,
+  focusedKey,
   onToggleSelection,
   showFullPath,
   onFocus,
@@ -113,6 +115,7 @@ export default memo(function FileGridView({
           storageConfig={storageConfig}
           folderMetadata={item.isFolder ? folderSizes?.[item.key] : undefined}
           isSelected={selectedKeys?.has(item.key) ?? false}
+          isFocused={focusedKey === item.key}
           showFullPath={showFullPath}
           onItemClick={onItemClick}
           onItemDoubleClick={onItemDoubleClick}

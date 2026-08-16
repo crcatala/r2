@@ -33,6 +33,7 @@ interface FolderMetadata {
 interface FileListViewProps {
   items: FileItem[];
   selectedKeys: Set<string>;
+  focusedKey?: string;
   metadata: Record<string, FolderMetadata>;
   nameSort: SortOrder;
   sizeSort: SortOrder;
@@ -56,7 +57,7 @@ interface FileListViewProps {
   onFocus?: (item: FileItem) => void;
 }
 
-const GRID_COLS = '28px minmax(280px, 1fr) 110px 160px 70px';
+const GRID_COLS = '28px minmax(160px, 1fr) 110px 160px 70px';
 
 /** Sort arrow indicator */
 function SortArrow({ order }: { order: SortOrder }) {
@@ -107,6 +108,7 @@ const VirtuosoItem = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElem
 export default function FileListView({
   items,
   selectedKeys,
+  focusedKey,
   metadata,
   nameSort,
   sizeSort,
@@ -203,6 +205,7 @@ export default function FileListView({
               <FileListRow
                 item={item}
                 isSelected={selectedKeys.has(item.key)}
+                isFocused={focusedKey === item.key}
                 density={density}
                 showFullPath={showFullPath}
                 folderMeta={folderMeta}

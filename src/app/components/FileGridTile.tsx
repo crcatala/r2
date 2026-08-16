@@ -183,6 +183,7 @@ interface FileGridTileProps {
   storageConfig?: StorageConfig | null;
   folderMetadata?: FolderMetadata;
   isSelected: boolean;
+  isFocused: boolean;
   showFullPath?: boolean;
   onItemClick: (item: FileItem) => void;
   onItemDoubleClick: (item: FileItem) => void;
@@ -201,6 +202,7 @@ const FileGridTile = memo(function FileGridTile({
   storageConfig,
   folderMetadata,
   isSelected,
+  isFocused,
   showFullPath,
   onItemClick,
   onItemDoubleClick,
@@ -259,7 +261,11 @@ const FileGridTile = memo(function FileGridTile({
       onFolderDelete={onFolderDelete}
     >
       <div
-        className={['fg-tile', isSelected ? 'selected' : ''].filter(Boolean).join(' ')}
+        className={
+          ['fg-tile', isSelected ? 'selected' : '', isFocused ? 'focused' : '']
+            .filter(Boolean)
+            .join(' ')
+        }
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
       >

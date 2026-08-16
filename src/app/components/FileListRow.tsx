@@ -38,6 +38,7 @@ interface FolderMetadata {
 interface FileListRowProps {
   item: FileItem;
   isSelected: boolean;
+  isFocused: boolean;
   density: Density;
   showFullPath: boolean;
   folderMeta?: FolderMetadata;
@@ -149,6 +150,7 @@ export function FlCheckbox({
 export default function FileListRow({
   item,
   isSelected,
+  isFocused,
   density,
   showFullPath,
   folderMeta,
@@ -165,7 +167,14 @@ export default function FileListRow({
 }: FileListRowProps) {
   const { tone, Icon } = toneAndIcon(item);
   const densityClass = density !== 'default' ? density : '';
-  const rowClass = ['fl-row', densityClass, isSelected ? 'selected' : ''].filter(Boolean).join(' ');
+  const rowClass = [
+    'fl-row',
+    densityClass,
+    isSelected ? 'selected' : '',
+    isFocused ? 'focused' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   // Size display
   let sizeDisplay: React.ReactNode = '--';

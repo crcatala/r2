@@ -552,6 +552,8 @@ export default function Home() {
       }
 
       if (item.isFolder) {
+        setFocusedItem(null);
+        setShowInspector(false);
         setCurrentPath(item.key);
         setSearchQuery('');
         clearSelection();
@@ -574,10 +576,41 @@ export default function Home() {
         clearTimeout(singleClickTimerRef.current);
         singleClickTimerRef.current = null;
       }
-      if (!item.isFolder) openPreview(item, filteredItems);
+      if (!item.isFolder) {
+        setFocusedItem(null);
+        setShowInspector(false);
+        openPreview(item, filteredItems);
+      }
     },
-    [openPreview, filteredItems]
+    [openPreview, filteredItems, setShowInspector]
   );
+
+  useEffect(() => {
+    function handleInspectorKeyDown(event: KeyboardEvent) {
+      if (!focusedItem || !showInspector || previewFile) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+      const index = filteredItems.findIndex((item) => item.key === focusedItem.key);
+      if (index === -1) return;
+      const nextIndex = Math.max(
+        0,
+        Math.min(
+          filteredItems.length - 1,
+          index + (event.key === 'ArrowDown' ? 1 : -1)
+        )
+      );
+      if (nextIndex === index) return;
+
+      event.preventDefault();
+      setFocusedItem(filteredItems[nextIndex]);
+      setShowInspector(true);
+    }
+
+    window.addEventListener('keydown', handleInspectorKeyDown);
+    return () => window.removeEventListener('keydown', handleInspectorKeyDown);
+  }, [filteredItems, focusedItem, previewFile, setShowInspector, showInspector]);
 
   useEffect(() => {
     return () => {
@@ -1149,8 +1182,9 @@ export default function Home() {
             )}
 
             {/* File area */}
-            <div className="file-area" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-              {!config ? (
+            <div className="file-area" style={{ flex: 1, minHeight: 0 }}>
+              <div className="file-browser-content">
+                {!config ? (
                 <EmptyState onUpload={() => setUploadModalOpen(true)} />
               ) : lastSyncTime === null && (isSyncing || syncPhase !== 'idle') ? (
                 /* Show sync overlay during initial sync (before cache is ready) */
@@ -1173,6 +1207,7 @@ export default function Home() {
                   sizeSort={sizeSort}
                   modifiedSort={modifiedSort}
                   showFullPath={!!searchQuery.trim()}
+                  focusedKey={focusedItem?.key}
                   onItemClick={handleItemClick}
                   onItemDoubleClick={handleItemDoubleClick}
                   onToggleSelection={toggleSelection}
@@ -1202,10 +1237,12 @@ export default function Home() {
                   storageConfig={config}
                   folderSizes={metadata}
                   selectedKeys={selectedKeys}
+                  focusedKey={focusedItem?.key}
                   onToggleSelection={toggleSelection}
                   showFullPath={!!searchQuery.trim()}
                 />
-              )}
+                )}
+              </div>
 
               {/* Inspector right-rail */}
               {showInspector && focusedItem && (

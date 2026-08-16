@@ -10,7 +10,7 @@ export interface ModalProps {
   title: ReactNode;
   subtitle?: ReactNode;
   icon?: ReactNode;
-  width?: number;
+  width?: number | string;
   footer?: ReactNode;
   children: ReactNode;
   bodyPadding?: number | string;
