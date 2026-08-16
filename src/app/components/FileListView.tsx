@@ -57,7 +57,7 @@ interface FileListViewProps {
   onFocus?: (item: FileItem) => void;
 }
 
-const GRID_COLS = '28px minmax(160px, 1fr) 110px 160px 70px';
+const GRID_COLS = '28px minmax(120px, 1fr) 80px 110px 60px';
 
 /** Sort arrow indicator */
 function SortArrow({ order }: { order: SortOrder }) {

@@ -161,8 +161,17 @@ export default function Home() {
     );
   }, [config]);
 
-  // Reset path to root when bucket changes
+  // Reset path and any pending/active Inspector selection when the storage
+  // context changes. This prevents a delayed single-click from applying to a
+  // file from the previous account or bucket.
   useEffect(() => {
+    if (singleClickTimerRef.current) {
+      clearTimeout(singleClickTimerRef.current);
+      singleClickTimerRef.current = null;
+    }
+    setFocusedItem(null);
+    setShowInspector(false);
+
     resetCurrentPath();
     setSearchQuery('');
     resetBatchOperation();
@@ -170,8 +179,10 @@ export default function Home() {
     currentConfig?.bucket,
     currentConfig?.account_id,
     currentConfig?.provider,
+    currentConfig?.token_id,
     resetBatchOperation,
     resetCurrentPath,
+    setShowInspector,
   ]);
 
   // Load download tasks from database when bucket changes

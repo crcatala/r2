@@ -2197,7 +2197,7 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 /* ── List view ── */
 .file-list {
   display: grid;
-  grid-template-columns: 28px minmax(160px, 1fr) 110px 160px 70px;
+  grid-template-columns: 28px minmax(120px, 1fr) 80px 110px 60px;
   width: 100%;
 }
 .file-list .col-h {
@@ -2548,8 +2548,8 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
 /* ── Inspector ── */
 .inspector {
   position: relative;
-  flex: 0 0 320px;
-  width: 320px;
+  flex: 0 0 clamp(240px, 28vw, 320px);
+  width: clamp(240px, 28vw, 320px);
   height: 100%;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
