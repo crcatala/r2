@@ -333,10 +333,13 @@ export default function ConfigModal({
   }
 
   async function handleLoadBuckets() {
-    const accountId = form.getFieldValue('accountId');
-    const accessKeyId = form.getFieldValue('accessKeyId');
-    const secretAccessKey = form.getFieldValue('secretAccessKey');
-    const region = form.getFieldValue('region');
+    // Credentials copied from provider dashboards commonly include a trailing
+    // newline. S3 signatures treat that as a different key, so normalize only
+    // the surrounding whitespace before making the transient discovery call.
+    const accountId = (form.getFieldValue('accountId') || '').trim();
+    const accessKeyId = (form.getFieldValue('accessKeyId') || '').trim();
+    const secretAccessKey = (form.getFieldValue('secretAccessKey') || '').trim();
+    const region = (form.getFieldValue('region') || '').trim();
     const endpointScheme = form.getFieldValue('endpointScheme') || 'https';
     const endpointHost = form.getFieldValue('endpointHost');
     const forcePathStyle =

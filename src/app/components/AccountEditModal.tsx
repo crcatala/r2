@@ -376,7 +376,13 @@ export default function AccountEditModal({
   }
 
   const handleLoadBuckets = useCallback(async () => {
-    if (provider === 'r2' && (!accountIdField || !accessKeyId || !secretAccessKey)) {
+    const normalizedAccountId = accountIdField.trim();
+    const normalizedAccessKeyId = accessKeyId.trim();
+    const normalizedSecretAccessKey = secretAccessKey.trim();
+    if (
+      provider === 'r2' &&
+      (!normalizedAccountId || !normalizedAccessKeyId || !normalizedSecretAccessKey)
+    ) {
       message.warning('Please enter Account ID, Access Key ID, and Secret Access Key first');
       return;
     }
@@ -409,10 +415,10 @@ export default function AccountEditModal({
         provider === 'r2'
           ? {
               provider: 'r2',
-              accountId: accountIdField,
+              accountId: normalizedAccountId,
               bucket: '',
-              accessKeyId,
-              secretAccessKey,
+              accessKeyId: normalizedAccessKeyId,
+              secretAccessKey: normalizedSecretAccessKey,
             }
           : provider === 'aws'
             ? {
