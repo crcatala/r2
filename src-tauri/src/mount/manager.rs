@@ -137,7 +137,13 @@ impl MountManager {
     }
 
     /// Active mounts, oldest first, so the UI ordering is stable.
+    ///
+    /// The OS can unmount an NFS volume without involving this process (for
+    /// example, through Finder). Reconcile first so callers never report a
+    /// registry entry as a live mount after that has happened.
     pub fn list(&self) -> Vec<MountInfo> {
+        self.remove_stale_mounts();
+
         let Ok(mounts) = self.mounts.lock() else {
             return Vec::new();
         };
@@ -174,6 +180,10 @@ impl MountManager {
         let _setup = self.setup.lock().await;
 
         let target = normalize_target(&request.local_path)?;
+        // Finder/Disk Utility can remove an NFS mount without notifying us.
+        // Drop such entries before considering path conflicts, or a stale
+        // registry record would make the target impossible to mount again.
+        self.remove_stale_mounts();
         self.ensure_path_available(&target)?;
         let created_dir = prepare_target(platform, &target)?;
 
@@ -306,7 +316,26 @@ impl MountManager {
 
         fs.drain(DRAIN_ROUNDS, stage::UPLOAD_ATTEMPTS).await;
 
-        run_umount_command(MountPlatform::CURRENT, &local_path).await?;
+        // The user may already have unmounted through Finder, Disk Utility, or
+        // the shell. In that case there is no OS mount left to release, but the
+        // registry and its background tasks must still be cleaned up.
+        if is_os_mount_active(&local_path) {
+            if let Err(error) = run_umount_command(MountPlatform::CURRENT, &local_path).await {
+                // A native unmount can race the command above. Recheck before
+                // reporting an error so "not currently mounted" does not trap
+                // the UI in its mounted state. Genuine failures (for example
+                // a busy mount) keep their existing retry behavior.
+                if is_os_mount_active(&local_path) {
+                    return Err(error);
+                }
+                log::info!(
+                    "mount: \"{}\" was externally unmounted while releasing it",
+                    local_path
+                );
+            }
+        } else {
+            log::info!("mount: \"{}\" was already externally unmounted", local_path);
+        }
 
         let removed = match self.mounts.lock() {
             Ok(mut mounts) => mounts.remove(mount_id),
@@ -397,6 +426,47 @@ impl MountManager {
 
         drain_on_exit(writable);
         self.emit_changed(app);
+    }
+
+    /// Removes registry entries whose mountpoints disappeared outside the app.
+    ///
+    /// Do not remove their staging directories: a writable mount may still
+    /// contain the only recoverable copy of a failed upload. Aborting the
+    /// listener and flusher releases app resources; detached uploads retain
+    /// their filesystem handle and can finish reading the preserved stage.
+    fn remove_stale_mounts(&self) {
+        let stale_ids: Vec<String> = match self.mounts.lock() {
+            Ok(mounts) => mounts
+                .iter()
+                .filter(|(_, mount)| !is_os_mount_active(&mount.info.local_path))
+                .map(|(id, _)| id.clone())
+                .collect(),
+            Err(_) => return,
+        };
+
+        if stale_ids.is_empty() {
+            return;
+        }
+
+        let removed: Vec<ActiveMount> = match self.mounts.lock() {
+            Ok(mut mounts) => stale_ids
+                .iter()
+                .filter_map(|id| mounts.remove(id))
+                .collect(),
+            Err(_) => return,
+        };
+
+        for mount in removed {
+            log::warn!(
+                "mount: removing stale registry entry for externally unmounted \"{}\"; preserving staged files at {}",
+                mount.info.local_path,
+                mount.fs.staging_root().display()
+            );
+            mount.server.abort();
+            if let Some(flusher) = mount.flusher {
+                flusher.abort();
+            }
+        }
     }
 
     /// Rejects a target that is the same as, inside, or a parent of an existing
@@ -573,6 +643,40 @@ fn reap_briefly(child: &mut std::process::Child) {
         "mount: pid {} did not exit after kill; detaching",
         child.id()
     );
+}
+
+/// Whether `target` is still a separate filesystem mounted by the OS.
+///
+/// Our Unix mounts are NFS filesystems mounted onto a directory, so their
+/// device differs from the directory's parent. This uses `stat(2)` metadata
+/// rather than parsing `mount` output, which avoids macOS path-escaping and
+/// localization pitfalls. Windows NFS mounts use a drive letter; once it is
+/// externally unmounted, its root no longer exists.
+#[cfg(unix)]
+fn is_os_mount_active(target: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let path = Path::new(target);
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let (Ok(target_metadata), Ok(parent_metadata)) =
+        (std::fs::metadata(path), std::fs::metadata(parent))
+    else {
+        return false;
+    };
+
+    is_mountpoint_device(target_metadata.dev(), parent_metadata.dev())
+}
+
+#[cfg(windows)]
+fn is_os_mount_active(target: &str) -> bool {
+    Path::new(&format!("{}\\", target)).exists()
+}
+
+#[cfg(unix)]
+fn is_mountpoint_device(target_device: u64, parent_device: u64) -> bool {
+    target_device != parent_device
 }
 
 /// Releases a mountpoint left behind by a previous crashed session.
@@ -854,6 +958,13 @@ async fn run_umount_command(platform: MountPlatform, target: &str) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mountpoint_has_a_different_device_than_its_parent() {
+        assert!(is_mountpoint_device(2, 1));
+        assert!(!is_mountpoint_device(1, 1));
+    }
 
     #[test]
     fn a_path_conflicts_with_itself() {
