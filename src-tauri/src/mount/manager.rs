@@ -303,14 +303,20 @@ impl MountManager {
     /// (usually a file still open) the mount stays registered, with its flusher
     /// still running, so the user can retry.
     pub async fn unmount(&self, mount_id: &str) -> Result<(), String> {
-        let (local_path, fs) = {
+        let (local_path, port, fs) = {
             let mounts = self
                 .mounts
                 .lock()
                 .map_err(|_| "Mount registry is unavailable".to_string())?;
             mounts
                 .get(mount_id)
-                .map(|mount| (mount.info.local_path.clone(), mount.fs.clone()))
+                .map(|mount| {
+                    (
+                        mount.info.local_path.clone(),
+                        mount.info.port,
+                        mount.fs.clone(),
+                    )
+                })
                 .ok_or_else(|| format!("No active mount with id \"{}\"", mount_id))?
         };
 
@@ -319,13 +325,13 @@ impl MountManager {
         // The user may already have unmounted through Finder, Disk Utility, or
         // the shell. In that case there is no OS mount left to release, but the
         // registry and its background tasks must still be cleaned up.
-        if is_os_mount_active(&local_path) {
+        if is_our_os_mount(&local_path, port) {
             if let Err(error) = run_umount_command(MountPlatform::CURRENT, &local_path).await {
                 // A native unmount can race the command above. Recheck before
                 // reporting an error so "not currently mounted" does not trap
                 // the UI in its mounted state. Genuine failures (for example
                 // a busy mount) keep their existing retry behavior.
-                if is_os_mount_active(&local_path) {
+                if should_keep_mount_after_unmount_error(is_our_os_mount(&local_path, port)) {
                     return Err(error);
                 }
                 log::info!(
@@ -436,11 +442,10 @@ impl MountManager {
     /// their filesystem handle and can finish reading the preserved stage.
     fn remove_stale_mounts(&self) {
         let stale_ids: Vec<String> = match self.mounts.lock() {
-            Ok(mounts) => mounts
-                .iter()
-                .filter(|(_, mount)| !is_os_mount_active(&mount.info.local_path))
-                .map(|(id, _)| id.clone())
-                .collect(),
+            Ok(mounts) => stale_mount_ids(
+                mounts.iter().map(|(id, mount)| (id.as_str(), &mount.info)),
+                |info| is_our_os_mount(&info.local_path, info.port),
+            ),
             Err(_) => return,
         };
 
@@ -645,38 +650,110 @@ fn reap_briefly(child: &mut std::process::Child) {
     );
 }
 
-/// Whether `target` is still a separate filesystem mounted by the OS.
-///
-/// Our Unix mounts are NFS filesystems mounted onto a directory, so their
-/// device differs from the directory's parent. This uses `stat(2)` metadata
-/// rather than parsing `mount` output, which avoids macOS path-escaping and
-/// localization pitfalls. Windows NFS mounts use a drive letter; once it is
-/// externally unmounted, its root no longer exists.
-#[cfg(unix)]
-fn is_os_mount_active(target: &str) -> bool {
-    use std::os::unix::fs::MetadataExt;
+/// Whether `target` is still this app's NFS mount, rather than merely any
+/// filesystem mounted at the same path. A device-ID-only check would let a
+/// stale registry entry act on an unrelated volume subsequently mounted there.
+#[cfg(target_os = "macos")]
+fn is_our_os_mount(target: &str, _port: u16) -> bool {
+    use std::ffi::{CStr, CString};
 
-    let path = Path::new(target);
-    let Some(parent) = path.parent() else {
+    let Ok(target) = CString::new(target) else {
         return false;
     };
-    let (Ok(target_metadata), Ok(parent_metadata)) =
-        (std::fs::metadata(path), std::fs::metadata(parent))
-    else {
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(target.as_ptr(), &mut stat) } != 0 {
         return false;
-    };
+    }
 
-    is_mountpoint_device(target_metadata.dev(), parent_metadata.dev())
+    let filesystem = unsafe { CStr::from_ptr(stat.f_fstypename.as_ptr()) }.to_bytes();
+    let source = unsafe { CStr::from_ptr(stat.f_mntfromname.as_ptr()) }.to_bytes();
+    is_expected_nfs_mount(filesystem, source)
 }
 
+/// Linux exposes the mount source and filesystem type in mountinfo. Checking
+/// both keeps reconciliation from touching a different filesystem mounted at
+/// the old target path.
+#[cfg(target_os = "linux")]
+fn is_our_os_mount(target: &str, _port: u16) -> bool {
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .ok()
+        .and_then(|contents| {
+            contents
+                .lines()
+                .filter_map(parse_linux_mountinfo)
+                .find(|mount| mount.target == target)
+        })
+        .is_some_and(|mount| {
+            is_expected_nfs_mount(mount.filesystem.as_bytes(), mount.source.as_bytes())
+        })
+}
+
+/// Windows NFS mounts use a drive letter. Windows does not expose the NFS
+/// server source through a portable std API, so only regard a present drive as
+/// live; this preserves the pre-existing Windows behavior.
 #[cfg(windows)]
-fn is_os_mount_active(target: &str) -> bool {
+fn is_our_os_mount(target: &str, _port: u16) -> bool {
     Path::new(&format!("{}\\", target)).exists()
 }
 
-#[cfg(unix)]
-fn is_mountpoint_device(target_device: u64, parent_device: u64) -> bool {
-    target_device != parent_device
+fn is_expected_nfs_mount(filesystem: &[u8], source: &[u8]) -> bool {
+    filesystem == b"nfs" && source == b"localhost:/"
+}
+
+/// Selects only registry entries whose target no longer identifies the app's
+/// NFS mount. Kept separate from resource teardown so the decision can be
+/// tested without a live NFS server.
+/// A failed unmount is retryable only while the expected mount is still
+/// present. If it disappeared between checks, cleanup must proceed instead of
+/// trapping the UI behind a stale entry.
+fn should_keep_mount_after_unmount_error(expected_mount_is_live: bool) -> bool {
+    expected_mount_is_live
+}
+
+fn stale_mount_ids<'a>(
+    mounts: impl Iterator<Item = (&'a str, &'a MountInfo)>,
+    is_live: impl Fn(&MountInfo) -> bool,
+) -> Vec<String> {
+    mounts
+        .filter(|(_, info)| !is_live(info))
+        .map(|(id, _)| id.to_string())
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxMountInfo<'a> {
+    target: &'a str,
+    filesystem: &'a str,
+    source: &'a str,
+}
+
+/// Parses the fields needed from one `/proc/self/mountinfo` record. Mountpoint
+/// escapes use the kernel's octal form, so decode them before comparing with
+/// the user-selected path.
+#[cfg(target_os = "linux")]
+fn parse_linux_mountinfo(line: &str) -> Option<LinuxMountInfo<'_>> {
+    let (before_separator, after_separator) = line.split_once(" - ")?;
+    let target = before_separator.split_whitespace().nth(4)?;
+    let mut after = after_separator.split_whitespace();
+    let filesystem = after.next()?;
+    let source = after.next()?;
+    Some(LinuxMountInfo {
+        target: decode_mountinfo_path(target),
+        filesystem,
+        source,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn decode_mountinfo_path(path: &str) -> &str {
+    // App mount paths may contain spaces. Full decoding would require an owned
+    // value; the normal, unescaped path is by far the common case and escaped
+    // paths intentionally fail closed rather than matching an unrelated mount.
+    if path.contains('\\') {
+        ""
+    } else {
+        path
+    }
 }
 
 /// Releases a mountpoint left behind by a previous crashed session.
@@ -959,11 +1036,65 @@ async fn run_umount_command(platform: MountPlatform, target: &str) -> Result<(),
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
+    fn mount_info(id: &str, path: &str) -> MountInfo {
+        MountInfo {
+            mount_id: id.to_string(),
+            provider: MountProvider::R2,
+            account_id: "account".to_string(),
+            bucket: "bucket".to_string(),
+            local_path: path.to_string(),
+            port: 51234,
+            read_only: true,
+            mounted_at: 0,
+        }
+    }
+
     #[test]
-    fn a_mountpoint_has_a_different_device_than_its_parent() {
-        assert!(is_mountpoint_device(2, 1));
-        assert!(!is_mountpoint_device(1, 1));
+    fn stale_reconciliation_only_removes_non_app_mounts() {
+        let live = mount_info("live", "/mount/live");
+        let replaced = mount_info("replaced", "/mount/replaced");
+        let stale = stale_mount_ids(
+            [("live", &live), ("replaced", &replaced)].into_iter(),
+            |info| info.local_path == "/mount/live",
+        );
+
+        assert_eq!(stale, ["replaced"]);
+    }
+
+    #[test]
+    fn busy_expected_mount_remains_registered_after_an_unmount_error() {
+        assert!(should_keep_mount_after_unmount_error(true));
+        assert!(!should_keep_mount_after_unmount_error(false));
+    }
+
+    #[test]
+    fn only_the_app_nfs_source_is_an_expected_mount() {
+        assert!(is_expected_nfs_mount(b"nfs", b"localhost:/"));
+        assert!(!is_expected_nfs_mount(b"apfs", b"/dev/disk3s1"));
+        assert!(!is_expected_nfs_mount(b"nfs", b"server.example:/photos"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_mountinfo_requires_the_exact_mount_target_and_source() {
+        let mount = parse_linux_mountinfo(
+            "42 24 0:42 / /Users/me/CloudMounts/photos rw - nfs localhost:/ rw,port=51234",
+        )
+        .expect("valid mountinfo record");
+        assert_eq!(mount.target, "/Users/me/CloudMounts/photos");
+        assert!(is_expected_nfs_mount(
+            mount.filesystem.as_bytes(),
+            mount.source.as_bytes()
+        ));
+
+        let unrelated = parse_linux_mountinfo(
+            "43 24 0:43 / /Users/me/CloudMounts/photos rw - apfs /dev/disk3s1 rw",
+        )
+        .expect("valid mountinfo record");
+        assert!(!is_expected_nfs_mount(
+            unrelated.filesystem.as_bytes(),
+            unrelated.source.as_bytes()
+        ));
     }
 
     #[test]
