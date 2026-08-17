@@ -21,7 +21,9 @@ pub async fn list_buckets(config: &R2Config) -> R2Result<Vec<R2Bucket>> {
             .as_service_error()
             .and_then(|service| service.code().or(service.message()))
             .unwrap_or("unclassified service error");
-        format!("R2 ListBuckets failed (HTTP {status}; {detail}). Verify the account ID and that this S3 API token has Account > R2 > Edit permission.")
+        format!(
+            "R2 ListBuckets failed (HTTP {status}; {detail}). Verify the account ID and that this S3 API token has Account > R2 > Edit permission. Bucket-scoped tokens cannot list buckets; add the exact authorized bucket name manually instead."
+        )
     })?;
 
     let buckets = response
