@@ -54,6 +54,7 @@ const {
   flushErrorMessage,
   shouldReportFlushError,
   FLUSH_ERROR_QUIET_MS,
+  setupNativeUnmountRefresh,
 } = await import('./mountStore');
 const { useToastStore } = await import('./toastStore');
 
@@ -157,6 +158,33 @@ describe('refreshMounts', () => {
     await useMountStore.getState().refreshMounts();
 
     expect(useMountStore.getState().mounts.length).toBe(1);
+  });
+});
+
+describe('native-unmount refresh', () => {
+  test('refreshes on focus and only when visibility returns', () => {
+    const listeners: Record<string, () => void> = {};
+    let visible = false;
+    let refreshes = 0;
+
+    setupNativeUnmountRefresh(
+      {
+        addEventListener: (event, listener) => {
+          listeners[event] = listener;
+        },
+      },
+      () => visible,
+      () => {
+        refreshes += 1;
+      }
+    );
+
+    listeners.focus();
+    listeners.visibilitychange();
+    visible = true;
+    listeners.visibilitychange();
+
+    expect(refreshes).toBe(2);
   });
 });
 
