@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 // ============ Token Struct ============
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Token {
     pub id: i64,
     pub account_id: String,
@@ -26,7 +26,7 @@ pub enum StorageProvider {
 }
 
 /// Full configuration needed for storage operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CurrentConfig {
     pub provider: StorageProvider,
     pub account_id: String,
@@ -87,25 +87,40 @@ pub async fn create_token(
     ).await?;
     let id = conn.last_insert_rowid();
     let record_id = id.to_string();
-    let encrypted_api_token = encrypt(
-        api_token,
-        "r2",
-        &record_id,
-        "api_token",
-        has_encrypted_records,
-    )?;
-    let encrypted_access_key_id = encrypt(access_key_id, "r2", &record_id, "access_key_id", true)?;
-    let encrypted_secret_access_key = encrypt(
-        secret_access_key,
-        "r2",
-        &record_id,
-        "secret_access_key",
-        true,
-    )?;
-    conn.execute(
-        "UPDATE tokens SET api_token = ?1, access_key_id = ?2, secret_access_key = ?3, credential_format = ?4 WHERE id = ?5",
-        turso::params![encrypted_api_token, encrypted_access_key_id, encrypted_secret_access_key, ENCRYPTED_V1_FORMAT, id],
-    ).await?;
+    let encrypted = (|| -> DbResult<(String, String, String)> {
+        Ok((
+            encrypt(
+                api_token,
+                "r2",
+                &record_id,
+                "api_token",
+                has_encrypted_records,
+            )?,
+            encrypt(access_key_id, "r2", &record_id, "access_key_id", true)?,
+            encrypt(
+                secret_access_key,
+                "r2",
+                &record_id,
+                "secret_access_key",
+                true,
+            )?,
+        ))
+    })();
+    let result = match encrypted {
+        Ok((encrypted_api_token, encrypted_access_key_id, encrypted_secret_access_key)) => conn.execute(
+            "UPDATE tokens SET api_token = ?1, access_key_id = ?2, secret_access_key = ?3, credential_format = ?4 WHERE id = ?5",
+            turso::params![encrypted_api_token, encrypted_access_key_id, encrypted_secret_access_key, ENCRYPTED_V1_FORMAT, id],
+        ).await.map(|_| ()).map_err(Into::into),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+        // The allocation exists solely to obtain immutable AAD. Never leave it
+        // behind as a fake legacy credential if keychain/AEAD work fails.
+        let _ = conn
+            .execute("DELETE FROM tokens WHERE id = ?1", turso::params![id])
+            .await;
+        return Err(error);
+    }
     Ok(Token {
         id,
         account_id: account_id.to_string(),

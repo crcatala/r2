@@ -126,6 +126,8 @@ export default function ConfigModal({
         loadAwsBuckets(editAccount.account.id);
         form.setFieldsValue({
           accountName: editAccount.account.name || '',
+          accessKeyId: editAccount.account.access_key_id,
+          secretAccessKey: editAccount.account.secret_access_key,
           region: editAccount.account.region,
           endpointScheme: editAccount.account.endpoint_scheme,
           endpointHost: editAccount.account.endpoint_host || '',
@@ -135,6 +137,8 @@ export default function ConfigModal({
         loadMinioBuckets(editAccount.account.id);
         form.setFieldsValue({
           accountName: editAccount.account.name || '',
+          accessKeyId: editAccount.account.access_key_id,
+          secretAccessKey: editAccount.account.secret_access_key,
           endpointScheme: editAccount.account.endpoint_scheme,
           endpointHost: editAccount.account.endpoint_host,
           forcePathStyle: editAccount.account.force_path_style,
@@ -143,6 +147,8 @@ export default function ConfigModal({
         loadRustfsBuckets(editAccount.account.id);
         form.setFieldsValue({
           accountName: editAccount.account.name || '',
+          accessKeyId: editAccount.account.access_key_id,
+          secretAccessKey: editAccount.account.secret_access_key,
           endpointScheme: editAccount.account.endpoint_scheme,
           endpointHost: editAccount.account.endpoint_host,
           forcePathStyle: true,
@@ -159,6 +165,9 @@ export default function ConfigModal({
         accountId: editToken.account_id,
         accountName: account?.account.name || '',
         tokenName: editToken.name || '',
+        apiToken: editToken.api_token,
+        accessKeyId: editToken.access_key_id,
+        secretAccessKey: editToken.secret_access_key,
       });
     } else if (mode === 'add-token' && parentAccountId) {
       setProvider('r2');

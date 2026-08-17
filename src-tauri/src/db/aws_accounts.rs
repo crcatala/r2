@@ -2,7 +2,7 @@ use super::{get_connection, DbResult};
 use crate::credential_crypto::{decrypt, encrypt, ENCRYPTED_V1_FORMAT};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AwsAccount {
     pub id: String,
     pub name: Option<String>,

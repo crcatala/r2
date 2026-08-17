@@ -101,6 +101,9 @@ export default function SettingsAccountPanel({ initialAccountId }: SettingsAccou
                   account or token to upgrade. This cannot securely erase historic SQLite pages, journals,
                   backups, or copied databases.
                 </p>
+                <button className="btn btn-sm" onClick={() => setEditing(accounts[0]?.account.id ?? null)}>
+                  Review accounts
+                </button>
               </div>
             </div>
           </section>

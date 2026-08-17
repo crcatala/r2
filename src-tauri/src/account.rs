@@ -591,31 +591,31 @@ pub async fn has_accounts() -> Result<bool, String> {
 
 // ============ Full Account Data (for sidebar) ============
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct AccountWithTokens {
     pub account: db::Account,
     pub tokens: Vec<TokenWithBuckets>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct TokenWithBuckets {
     pub token: db::Token,
     pub buckets: Vec<db::Bucket>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct AwsAccountWithBuckets {
     pub account: db::AwsAccount,
     pub buckets: Vec<db::AwsBucket>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct MinioAccountWithBuckets {
     pub account: db::MinioAccount,
     pub buckets: Vec<db::MinioBucket>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct RustfsAccountWithBuckets {
     pub account: db::RustfsAccount,
     pub buckets: Vec<db::RustfsBucket>,
