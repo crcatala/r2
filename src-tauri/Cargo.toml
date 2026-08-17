@@ -57,6 +57,7 @@ tauri-plugin-video-thumbnail = { git = "https://github.com/dickwu/tauri-plugin-v
 aws-config = "1.8"
 aws-sdk-s3 = { version = "1.135.0", features = ["behavior-version-latest"] }
 aws-credential-types = "1.2"
+aws-smithy-types = "1"
 futures-util = "0.3"
 # Multi-threaded download engine with Range-based parallel chunk acceleration
 range-dl = { path = "crates/range-dl" }
