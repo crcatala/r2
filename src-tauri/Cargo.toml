@@ -65,6 +65,12 @@ tauri-plugin-connector = { version = "0.9", optional = true }
 # Localhost NFSv3 server backing the "mount bucket as local drive" feature
 nfsserve = "0.11"
 async-trait = "0.1"
+# Credentials saved in SQLite are encrypted with a per-install DEK held by the
+# native Keychain / Credential Manager / Secret Service.
+keyring = "4.1"
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+rand = "0.9"
+zeroize = "1.8"
 
 # uid/gid for the synthetic file attributes served over NFS
 [target.'cfg(unix)'.dependencies]

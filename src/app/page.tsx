@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { App, Spin, type InputRef } from 'antd';
+import { App, Modal, Spin, type InputRef } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -79,6 +79,8 @@ export default function Home() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
+  const [legacyCredentialCount, setLegacyCredentialCount] = useState(0);
+  const [showLegacyCredentialNotice, setShowLegacyCredentialNotice] = useState(false);
 
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [dropQueue, setDropQueue] = useState<string[][]>([]);
@@ -366,7 +368,21 @@ export default function Home() {
   // Initialize store on mount
   useEffect(() => {
     initialize();
-  }, []);
+  }, [initialize]);
+
+  // Only installations carrying pre-encryption rows see this one-time notice.
+  useEffect(() => {
+    invoke<{ legacy_credential_count: number; legacy_notice_acknowledged: boolean }>(
+      'get_credential_security_status'
+    )
+      .then((status) => {
+        setLegacyCredentialCount(status.legacy_credential_count);
+        setShowLegacyCredentialNotice(
+          status.legacy_credential_count > 0 && !status.legacy_notice_acknowledged
+        );
+      })
+      .catch(() => undefined);
+  }, [initialized]);
 
   useEffect(() => {
     let unlistenDragDrop: UnlistenFn | undefined;
@@ -1293,6 +1309,29 @@ export default function Home() {
                 parentAccountId={parentAccountId}
               />
             )}
+
+            <Modal
+              open={showLegacyCredentialNotice}
+              title="Legacy unencrypted credentials detected"
+              okText="I understand"
+              cancelButtonProps={{ style: { display: 'none' } }}
+              onOk={async () => {
+                await invoke('acknowledge_legacy_credential_notice');
+                setShowLegacyCredentialNotice(false);
+              }}
+              closable={false}
+              maskClosable={false}
+            >
+              <p>
+                {legacyCredentialCount} saved credential{legacyCredentialCount === 1 ? '' : 's'} use the older
+                unencrypted format. Existing accounts will continue to work.
+              </p>
+              <p>
+                Remove and re-add each account or token to protect its new credentials. This removes active
+                records only; it cannot erase historic SQLite pages, journals, backups, or copied databases.
+                Rotate credentials if prior exposure is suspected.
+              </p>
+            </Modal>
 
             <SettingsModal
               open={settingsOpen}

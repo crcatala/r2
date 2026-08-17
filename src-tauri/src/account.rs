@@ -33,7 +33,7 @@ pub async fn delete_account(id: String) -> Result<(), String> {
 
 // ============ Token Commands ============
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct CreateTokenInput {
     pub account_id: String,
     pub name: Option<String>,
@@ -62,7 +62,7 @@ pub async fn create_token(input: CreateTokenInput) -> Result<db::Token, String> 
     .map_err(|e| format!("Failed to create token: {}", e))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateTokenInput {
     pub id: i64,
     pub name: Option<String>,
@@ -170,7 +170,7 @@ pub async fn delete_bucket(id: i64) -> Result<(), String> {
 
 // ============ AWS Account Commands ============
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct CreateAwsAccountInput {
     pub name: Option<String>,
     pub access_key_id: String,
@@ -203,7 +203,7 @@ pub async fn create_aws_account(input: CreateAwsAccountInput) -> Result<db::AwsA
     .map_err(|e| format!("Failed to create AWS account: {}", e))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateAwsAccountInput {
     pub id: String,
     pub name: Option<String>,
@@ -282,7 +282,7 @@ pub async fn save_aws_bucket_configs(
 
 // ============ MinIO Account Commands ============
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct CreateMinioAccountInput {
     pub name: Option<String>,
     pub access_key_id: String,
@@ -315,7 +315,7 @@ pub async fn create_minio_account(
     .map_err(|e| format!("Failed to create MinIO account: {}", e))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateMinioAccountInput {
     pub id: String,
     pub name: Option<String>,
@@ -392,7 +392,7 @@ pub async fn save_minio_bucket_configs(
 
 // ============ RustFS Account Commands ============
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct CreateRustfsAccountInput {
     pub name: Option<String>,
     pub access_key_id: String,
@@ -424,7 +424,7 @@ pub async fn create_rustfs_account(
     .map_err(|e| format!("Failed to create RustFS account: {}", e))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateRustfsAccountInput {
     pub id: String,
     pub name: Option<String>,
@@ -498,6 +498,38 @@ pub async fn save_rustfs_bucket_configs(
     db::save_rustfs_buckets_for_account(&account_id, &bucket_data)
         .await
         .map_err(|e| format!("Failed to save RustFS bucket configs: {}", e))
+}
+
+// ============ Credential security status ============
+
+#[derive(Serialize)]
+pub struct CredentialSecurityStatus {
+    pub legacy_credential_count: i64,
+    pub legacy_notice_acknowledged: bool,
+}
+
+#[tauri::command]
+pub async fn get_credential_security_status() -> Result<CredentialSecurityStatus, String> {
+    let legacy_credential_count = db::legacy_credential_count()
+        .await
+        .map_err(|_| "Failed to inspect credential security status".to_string())?;
+    let legacy_notice_acknowledged =
+        db::get_app_state("credential_security_legacy_notice_acknowledged")
+            .await
+            .map_err(|_| "Failed to read credential security status".to_string())?
+            .as_deref()
+            == Some("true");
+    Ok(CredentialSecurityStatus {
+        legacy_credential_count,
+        legacy_notice_acknowledged,
+    })
+}
+
+#[tauri::command]
+pub async fn acknowledge_legacy_credential_notice() -> Result<(), String> {
+    db::set_app_state("credential_security_legacy_notice_acknowledged", "true")
+        .await
+        .map_err(|_| "Failed to save credential security status".to_string())
 }
 
 // ============ State Commands ============
