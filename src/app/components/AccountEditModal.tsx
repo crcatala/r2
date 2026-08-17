@@ -824,6 +824,7 @@ export default function AccountEditModal({
               <div className="field-label field-required">API Token</div>
               <input
                 className="input mono"
+                type="password"
                 value={apiToken}
                 onChange={(e) => setApiToken(e.target.value)}
                 placeholder="v3.eyJ…"
@@ -838,6 +839,7 @@ export default function AccountEditModal({
             <div className="field-label field-required">Access Key ID</div>
             <input
               className="input mono"
+              type="password"
               value={accessKeyId}
               onChange={(e) => setAccessKeyId(e.target.value)}
               placeholder="AKIA…"

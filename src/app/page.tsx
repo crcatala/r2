@@ -1315,12 +1315,12 @@ export default function Home() {
               title="Legacy unencrypted credentials detected"
               okText="I understand"
               cancelButtonProps={{ style: { display: 'none' } }}
+              mask={{ closable: false }}
               onOk={async () => {
                 await invoke('acknowledge_legacy_credential_notice');
                 setShowLegacyCredentialNotice(false);
               }}
               closable={false}
-              maskClosable={false}
             >
               <p>
                 {legacyCredentialCount} saved credential{legacyCredentialCount === 1 ? '' : 's'} use the older

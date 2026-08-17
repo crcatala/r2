@@ -1039,7 +1039,7 @@ export default function ConfigModal({
               rules={[{ required: true, message: 'Required' }]}
               style={{ marginBottom: 12 }}
             >
-              <Input
+              <Input.Password
                 placeholder="S3-compatible Access Key ID"
                 autoComplete="off"
                 autoCorrect="off"
@@ -1073,7 +1073,7 @@ export default function ConfigModal({
               rules={[{ required: true, message: 'Required' }]}
               style={{ marginBottom: 12 }}
             >
-              <Input
+              <Input.Password
                 placeholder="Access Key ID"
                 autoComplete="off"
                 autoCorrect="off"
