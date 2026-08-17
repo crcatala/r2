@@ -143,7 +143,16 @@ impl MountManager {
     /// registry entry as a live mount after that has happened.
     pub fn list(&self) -> Vec<MountInfo> {
         self.remove_stale_mounts();
+        self.snapshot()
+    }
 
+    /// Returns the registry state without probing the OS mountpoints.
+    ///
+    /// Mount events are emitted immediately after the OS mount command returns.
+    /// Re-probing a newly-created NFS mount at that point can block in macOS's
+    /// NFS client, making every mount appear slow. Explicit list/refresh calls
+    /// still reconcile through [`Self::list`].
+    fn snapshot(&self) -> Vec<MountInfo> {
         let Ok(mounts) = self.mounts.lock() else {
             return Vec::new();
         };
@@ -156,12 +165,13 @@ impl MountManager {
         infos
     }
 
-    /// Broadcasts the full mount list. Fire-and-forget, like the transfer events.
+    /// Broadcasts the registry state without synchronously probing NFS mounts.
+    /// Explicit list/refresh calls remain responsible for stale-mount cleanup.
     pub fn emit_changed(&self, app: &tauri::AppHandle) {
         let _ = app.emit(
             "mount-changed",
             MountChangedPayload {
-                mounts: self.list(),
+                mounts: self.snapshot(),
             },
         );
     }
