@@ -431,7 +431,12 @@ export default function ConfigModal({
       }
     } catch (e) {
       console.error('Failed to load buckets:', e);
-      message.error(e instanceof Error ? e.message : 'Failed to load buckets');
+      // Tauri IPC rejects with a string, not necessarily an Error instance.
+      // Preserve its actionable (and credential-safe) backend explanation in
+      // the toast instead of collapsing it to a generic failure.
+      message.error(
+        typeof e === 'string' ? e : e instanceof Error ? e.message : 'Failed to load buckets'
+      );
     } finally {
       setLoadingBuckets(false);
     }

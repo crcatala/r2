@@ -470,7 +470,9 @@ export default function AccountEditModal({
       setBuckets(merged);
       message.success(`Found ${merged.length} bucket(s)`);
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Failed to load buckets');
+      message.error(
+        typeof e === 'string' ? e : e instanceof Error ? e.message : 'Failed to load buckets'
+      );
     } finally {
       setLoadingBuckets(false);
     }
