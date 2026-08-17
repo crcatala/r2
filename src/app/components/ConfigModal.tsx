@@ -333,10 +333,13 @@ export default function ConfigModal({
   }
 
   async function handleLoadBuckets() {
-    const accountId = form.getFieldValue('accountId');
-    const accessKeyId = form.getFieldValue('accessKeyId');
-    const secretAccessKey = form.getFieldValue('secretAccessKey');
-    const region = form.getFieldValue('region');
+    // Credentials copied from provider dashboards commonly include a trailing
+    // newline. S3 signatures treat that as a different key, so normalize only
+    // the surrounding whitespace before making the transient discovery call.
+    const accountId = (form.getFieldValue('accountId') || '').trim();
+    const accessKeyId = (form.getFieldValue('accessKeyId') || '').trim();
+    const secretAccessKey = (form.getFieldValue('secretAccessKey') || '').trim();
+    const region = (form.getFieldValue('region') || '').trim();
     const endpointScheme = form.getFieldValue('endpointScheme') || 'https';
     const endpointHost = form.getFieldValue('endpointHost');
     const forcePathStyle =
@@ -428,7 +431,12 @@ export default function ConfigModal({
       }
     } catch (e) {
       console.error('Failed to load buckets:', e);
-      message.error(e instanceof Error ? e.message : 'Failed to load buckets');
+      // Tauri IPC rejects with a string, not necessarily an Error instance.
+      // Preserve its actionable (and credential-safe) backend explanation in
+      // the toast instead of collapsing it to a generic failure.
+      message.error(
+        typeof e === 'string' ? e : e instanceof Error ? e.message : 'Failed to load buckets'
+      );
     } finally {
       setLoadingBuckets(false);
     }
@@ -1039,7 +1047,7 @@ export default function ConfigModal({
               rules={[{ required: true, message: 'Required' }]}
               style={{ marginBottom: 12 }}
             >
-              <Input
+              <Input.Password
                 placeholder="S3-compatible Access Key ID"
                 autoComplete="off"
                 autoCorrect="off"
@@ -1073,7 +1081,7 @@ export default function ConfigModal({
               rules={[{ required: true, message: 'Required' }]}
               style={{ marginBottom: 12 }}
             >
-              <Input
+              <Input.Password
                 placeholder="Access Key ID"
                 autoComplete="off"
                 autoCorrect="off"

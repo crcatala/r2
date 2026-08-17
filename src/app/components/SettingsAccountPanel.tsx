@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   PlusOutlined,
   DatabaseOutlined,
@@ -68,6 +69,13 @@ function AccountCard({
 /* ── SettingsAccountPanel ────────────────────────────────────────── */
 export default function SettingsAccountPanel({ initialAccountId }: SettingsAccountPanelProps) {
   const accounts = useAccountStore((s) => s.accounts);
+  const [legacyCredentialCount, setLegacyCredentialCount] = useState(0);
+
+  useEffect(() => {
+    invoke<{ legacy_credential_count: number }>('get_credential_security_status')
+      .then((status) => setLegacyCredentialCount(status.legacy_credential_count))
+      .catch(() => undefined);
+  }, [accounts]);
 
   // Edit-modal state
   // - editing === undefined ⇒ modal closed
@@ -83,6 +91,24 @@ export default function SettingsAccountPanel({ initialAccountId }: SettingsAccou
   return (
     <>
       <div className="settings-section-stack">
+        {legacyCredentialCount > 0 && (
+          <section className="settings-section">
+            <div className="settings-section-head">
+              <div>
+                <h3>Credential security</h3>
+                <p>
+                  Legacy unencrypted credentials detected ({legacyCredentialCount}). Remove and re-add each
+                  account or token to upgrade. This cannot securely erase historic SQLite pages, journals,
+                  backups, or copied databases.
+                </p>
+                <button className="btn btn-sm" onClick={() => setEditing(accounts[0]?.account.id ?? null)}>
+                  Review accounts
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
         <section className="settings-section">
           <div className="settings-section-head">
             <div>

@@ -687,14 +687,17 @@ fn is_our_os_mount(target: &str, _port: u16) -> bool {
 fn is_our_os_mount(target: &str, _port: u16) -> bool {
     std::fs::read_to_string("/proc/self/mountinfo")
         .ok()
-        .and_then(|contents| {
+        .is_some_and(|contents| {
             contents
                 .lines()
                 .filter_map(parse_linux_mountinfo)
-                .find(|mount| mount.target == target)
-        })
-        .is_some_and(|mount| {
-            is_expected_nfs_mount(mount.filesystem.as_bytes(), mount.source.as_bytes())
+                .any(|mount| {
+                    mount.target == target
+                        && is_expected_nfs_mount(
+                            mount.filesystem.as_bytes(),
+                            mount.source.as_bytes(),
+                        )
+                })
         })
 }
 

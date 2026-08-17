@@ -164,6 +164,25 @@ pub async fn init_db(db_path: &Path) -> DbResult<()> {
     ))
     .await?;
 
+    // Credential rows created by earlier releases are legacy plaintext (0).
+    // New writes use the explicit encrypted format version (1); never infer it
+    // from a value prefix so future formats and rotations remain possible.
+    for table in [
+        "tokens",
+        "aws_accounts",
+        "minio_accounts",
+        "rustfs_accounts",
+    ] {
+        let _ = conn
+            .execute(
+                &format!(
+                    "ALTER TABLE {table} ADD COLUMN credential_format INTEGER NOT NULL DEFAULT 0"
+                ),
+                (),
+            )
+            .await;
+    }
+
     // Add the explicit public-access flag to S3-family bucket tables for
     // existing DBs (idempotent). Backfill: any bucket that already had a custom
     // public domain host was served publicly before the flag existed.
@@ -212,6 +231,52 @@ pub async fn init_db(db_path: &Path) -> DbResult<()> {
     Ok(())
 }
 
+/// Whether this database contains any encrypted credentials. This must be
+/// checked before creating a DEK: a missing key for such a database is a
+/// recovery case, not a new installation.
+pub async fn legacy_credential_count() -> DbResult<i64> {
+    let conn = get_connection()?.lock().await;
+    let mut count = 0;
+    for table in [
+        "tokens",
+        "aws_accounts",
+        "minio_accounts",
+        "rustfs_accounts",
+    ] {
+        let mut rows = conn
+            .query(
+                &format!("SELECT COUNT(*) FROM {table} WHERE credential_format = 0"),
+                (),
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            count += row.get::<i64>(0)?;
+        }
+    }
+    Ok(count)
+}
+
+pub async fn has_encrypted_credentials() -> DbResult<bool> {
+    let conn = get_connection()?.lock().await;
+    for table in [
+        "tokens",
+        "aws_accounts",
+        "minio_accounts",
+        "rustfs_accounts",
+    ] {
+        let mut rows = conn
+            .query(
+                &format!("SELECT 1 FROM {table} WHERE credential_format = 1 LIMIT 1"),
+                (),
+            )
+            .await?;
+        if rows.next().await?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 // Re-export session functions
 pub use sessions::{
     cleanup_old_sessions, create_session, delete_session, find_resumable_session,
@@ -227,7 +292,7 @@ pub use tokens::{
 };
 
 // Re-export app_state functions
-pub use app_state::set_app_state;
+pub use app_state::{get_app_state, set_app_state};
 
 // Re-export account functions
 pub use accounts::{create_account, delete_account, has_accounts, list_accounts, update_account};

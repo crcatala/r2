@@ -376,7 +376,13 @@ export default function AccountEditModal({
   }
 
   const handleLoadBuckets = useCallback(async () => {
-    if (provider === 'r2' && (!accountIdField || !accessKeyId || !secretAccessKey)) {
+    const normalizedAccountId = accountIdField.trim();
+    const normalizedAccessKeyId = accessKeyId.trim();
+    const normalizedSecretAccessKey = secretAccessKey.trim();
+    if (
+      provider === 'r2' &&
+      (!normalizedAccountId || !normalizedAccessKeyId || !normalizedSecretAccessKey)
+    ) {
       message.warning('Please enter Account ID, Access Key ID, and Secret Access Key first');
       return;
     }
@@ -409,10 +415,10 @@ export default function AccountEditModal({
         provider === 'r2'
           ? {
               provider: 'r2',
-              accountId: accountIdField,
+              accountId: normalizedAccountId,
               bucket: '',
-              accessKeyId,
-              secretAccessKey,
+              accessKeyId: normalizedAccessKeyId,
+              secretAccessKey: normalizedSecretAccessKey,
             }
           : provider === 'aws'
             ? {
@@ -464,7 +470,9 @@ export default function AccountEditModal({
       setBuckets(merged);
       message.success(`Found ${merged.length} bucket(s)`);
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Failed to load buckets');
+      message.error(
+        typeof e === 'string' ? e : e instanceof Error ? e.message : 'Failed to load buckets'
+      );
     } finally {
       setLoadingBuckets(false);
     }
@@ -824,6 +832,7 @@ export default function AccountEditModal({
               <div className="field-label field-required">API Token</div>
               <input
                 className="input mono"
+                type="password"
                 value={apiToken}
                 onChange={(e) => setApiToken(e.target.value)}
                 placeholder="v3.eyJ…"
@@ -838,6 +847,7 @@ export default function AccountEditModal({
             <div className="field-label field-required">Access Key ID</div>
             <input
               className="input mono"
+              type="password"
               value={accessKeyId}
               onChange={(e) => setAccessKeyId(e.target.value)}
               placeholder="AKIA…"

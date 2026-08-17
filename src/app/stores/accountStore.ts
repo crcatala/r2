@@ -482,6 +482,7 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
     const { currentConfig, loadAccounts, loadCurrentConfig } = get();
     try {
       await invoke('delete_token', { id });
+      if (currentConfig?.token_id === id) set({ currentConfig: null });
       await loadAccounts();
       // If deleted current token, reload config
       if (currentConfig?.token_id === id) {
@@ -565,6 +566,7 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
     const { currentConfig, loadAccounts, loadCurrentConfig } = get();
     try {
       await invoke('delete_aws_account', { id });
+      if (currentConfig?.provider === 'aws' && currentConfig.account_id === id) set({ currentConfig: null });
       await loadAccounts();
       if (currentConfig?.provider === 'aws' && currentConfig.account_id === id) {
         await loadCurrentConfig();
@@ -646,6 +648,7 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
     const { currentConfig, loadAccounts, loadCurrentConfig } = get();
     try {
       await invoke('delete_minio_account', { id });
+      if (currentConfig?.provider === 'minio' && currentConfig.account_id === id) set({ currentConfig: null });
       await loadAccounts();
       if (currentConfig?.provider === 'minio' && currentConfig.account_id === id) {
         await loadCurrentConfig();
@@ -725,6 +728,7 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
     const { currentConfig, loadAccounts, loadCurrentConfig } = get();
     try {
       await invoke('delete_rustfs_account', { id });
+      if (currentConfig?.provider === 'rustfs' && currentConfig.account_id === id) set({ currentConfig: null });
       await loadAccounts();
       if (currentConfig?.provider === 'rustfs' && currentConfig.account_id === id) {
         await loadCurrentConfig();

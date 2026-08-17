@@ -1,5 +1,7 @@
 //! R2 list operations (buckets, objects)
 
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
+
 use super::types::{
     create_r2_client, ListObjectsResult, R2Bucket, R2Config, R2Object, R2Result,
     RecursiveListResult,
@@ -8,7 +10,21 @@ use super::types::{
 /// List all buckets in the R2 account
 pub async fn list_buckets(config: &R2Config) -> R2Result<Vec<R2Bucket>> {
     let client = create_r2_client(config).await?;
-    let response = client.list_buckets().send().await?;
+    let response = client.list_buckets().send().await.map_err(|error| {
+        // Keep the actionable server response while never including request
+        // headers (which contain the SigV4 authorization value) or credentials.
+        let status = error
+            .raw_response()
+            .map(|response| response.status().as_u16().to_string())
+            .unwrap_or_else(|| "no HTTP response".to_string());
+        let detail = error
+            .as_service_error()
+            .and_then(|service| service.code().or(service.message()))
+            .unwrap_or("unclassified service error");
+        format!(
+            "R2 ListBuckets failed (HTTP {status}; {detail}). Verify the account ID and that this S3 API token has Account > R2 > Edit permission. Bucket-scoped tokens cannot list buckets; add the exact authorized bucket name manually instead."
+        )
+    })?;
 
     let buckets = response
         .buckets()

@@ -1,7 +1,8 @@
 use super::{get_connection, DbResult};
+use crate::credential_crypto::{decrypt, encrypt, ENCRYPTED_V1_FORMAT};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MinioAccount {
     pub id: String,
     pub name: Option<String>,
@@ -21,6 +22,7 @@ pub fn get_table_sql() -> &'static str {
         name TEXT,
         access_key_id TEXT NOT NULL,
         secret_access_key TEXT NOT NULL,
+        credential_format INTEGER NOT NULL DEFAULT 0,
         endpoint_scheme TEXT NOT NULL,
         endpoint_host TEXT NOT NULL,
         force_path_style INTEGER NOT NULL DEFAULT 1,
@@ -49,25 +51,24 @@ pub async fn create_minio_account(
     endpoint_host: &str,
     force_path_style: bool,
 ) -> DbResult<MinioAccount> {
+    let has_encrypted_records = super::has_encrypted_credentials().await?;
     let conn = get_connection()?.lock().await;
     let now = chrono::Utc::now().timestamp();
     let id = generate_id(&conn).await?;
+    let encrypted_access_key_id = encrypt(
+        access_key_id,
+        "minio",
+        &id,
+        "access_key_id",
+        has_encrypted_records,
+    )?;
+    let encrypted_secret_access_key =
+        encrypt(secret_access_key, "minio", &id, "secret_access_key", true)?;
     let force_value = if force_path_style { 1 } else { 0 };
-
     conn.execute(
-        "INSERT INTO minio_accounts (id, name, access_key_id, secret_access_key, endpoint_scheme, endpoint_host, force_path_style, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        turso::params![
-            id.as_str(),
-            name,
-            access_key_id,
-            secret_access_key,
-            endpoint_scheme,
-            endpoint_host,
-            force_value,
-            now,
-            now
-        ],
+        "INSERT INTO minio_accounts (id, name, access_key_id, secret_access_key, credential_format, endpoint_scheme, endpoint_host, force_path_style, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        turso::params![id.as_str(), name, encrypted_access_key_id, encrypted_secret_access_key, ENCRYPTED_V1_FORMAT, endpoint_scheme, endpoint_host, force_value, now, now],
     ).await?;
 
     Ok(MinioAccount {
@@ -87,7 +88,7 @@ pub async fn list_minio_accounts() -> DbResult<Vec<MinioAccount>> {
     let conn = get_connection()?.lock().await;
     let mut rows = conn
         .query(
-            "SELECT id, name, access_key_id, secret_access_key, endpoint_scheme, endpoint_host, force_path_style, created_at, updated_at
+            "SELECT id, name, access_key_id, secret_access_key, credential_format, endpoint_scheme, endpoint_host, force_path_style, created_at, updated_at
              FROM minio_accounts ORDER BY created_at",
             (),
         )
@@ -95,17 +96,27 @@ pub async fn list_minio_accounts() -> DbResult<Vec<MinioAccount>> {
 
     let mut accounts = Vec::new();
     while let Some(row) = rows.next().await? {
-        let force_value: i64 = row.get(6)?;
+        let id: String = row.get(0)?;
+        let format: i64 = row.get(4)?;
+        let access_key_id: String = row.get(2)?;
+        let secret_access_key: String = row.get(3)?;
+        let force_value: i64 = row.get(7)?;
         accounts.push(MinioAccount {
-            id: row.get(0)?,
+            id: id.clone(),
             name: row.get(1)?,
-            access_key_id: row.get(2)?,
-            secret_access_key: row.get(3)?,
-            endpoint_scheme: row.get(4)?,
-            endpoint_host: row.get(5)?,
+            access_key_id: decrypt(&access_key_id, format, "minio", &id, "access_key_id")?,
+            secret_access_key: decrypt(
+                &secret_access_key,
+                format,
+                "minio",
+                &id,
+                "secret_access_key",
+            )?,
+            endpoint_scheme: row.get(5)?,
+            endpoint_host: row.get(6)?,
             force_path_style: force_value != 0,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         });
     }
     Ok(accounts)
@@ -120,27 +131,24 @@ pub async fn update_minio_account(
     endpoint_host: &str,
     force_path_style: bool,
 ) -> DbResult<()> {
+    let has_encrypted_records = super::has_encrypted_credentials().await?;
+    let encrypted_access_key_id = encrypt(
+        access_key_id,
+        "minio",
+        id,
+        "access_key_id",
+        has_encrypted_records,
+    )?;
+    let encrypted_secret_access_key =
+        encrypt(secret_access_key, "minio", id, "secret_access_key", true)?;
     let conn = get_connection()?.lock().await;
     let now = chrono::Utc::now().timestamp();
     let force_value = if force_path_style { 1 } else { 0 };
-
     conn.execute(
-        "UPDATE minio_accounts
-         SET name = ?1, access_key_id = ?2, secret_access_key = ?3,
-             endpoint_scheme = ?4, endpoint_host = ?5, force_path_style = ?6, updated_at = ?7
-         WHERE id = ?8",
-        turso::params![
-            name,
-            access_key_id,
-            secret_access_key,
-            endpoint_scheme,
-            endpoint_host,
-            force_value,
-            now,
-            id
-        ],
-    )
-    .await?;
+        "UPDATE minio_accounts SET name = ?1, access_key_id = ?2, secret_access_key = ?3, credential_format = ?4,
+             endpoint_scheme = ?5, endpoint_host = ?6, force_path_style = ?7, updated_at = ?8 WHERE id = ?9",
+        turso::params![name, encrypted_access_key_id, encrypted_secret_access_key, ENCRYPTED_V1_FORMAT, endpoint_scheme, endpoint_host, force_value, now, id],
+    ).await?;
 
     Ok(())
 }

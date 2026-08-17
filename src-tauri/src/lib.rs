@@ -10,6 +10,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 mod account;
 mod commands;
+mod credential_crypto;
 mod db;
 mod download;
 mod mount;
@@ -324,6 +325,8 @@ pub fn run() {
             account::list_rustfs_bucket_configs,
             account::save_rustfs_bucket_configs,
             // State commands
+            account::get_credential_security_status,
+            account::acknowledge_legacy_credential_notice,
             account::get_current_config,
             account::set_current_token,
             account::set_current_aws_bucket,
