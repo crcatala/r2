@@ -14,12 +14,14 @@ import {
   LinkOutlined,
   DisconnectOutlined,
   FolderOpenOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import { useAccountStore, Token, ProviderAccount } from '@/app/stores/accountStore';
 import { useMountStore, findMount, type MountTarget } from '@/app/stores/mountStore';
 import { detectOs, revealActionLabel } from '@/app/utils/mount';
 import { useThemeStore } from '@/app/stores/themeStore';
 import { useCurrentPathStore } from '@/app/stores/currentPathStore';
+import { syncBucketNow, type StorageConfig } from '@/app/lib/r2cache';
 import AccountTransferModal from '@/app/components/AccountTransferModal';
 import {
   AccountRow,
@@ -294,6 +296,68 @@ export default function AccountSidebar({
     };
   }
 
+  /**
+   * Build a StorageConfig for any listed bucket, mirroring buildMountTarget.
+   * Sync now runs against these credentials directly so it works for buckets
+   * that are not currently selected.
+   */
+  function buildSyncConfig(
+    accountData: ProviderAccount,
+    bucketName: string,
+    token?: Token
+  ): StorageConfig {
+    if (accountData.provider === 'r2') {
+      return {
+        provider: 'r2',
+        accountId: accountData.account.id,
+        bucket: bucketName,
+        accessKeyId: token?.access_key_id,
+        secretAccessKey: token?.secret_access_key,
+      };
+    }
+
+    if (accountData.provider === 'aws') {
+      const account = accountData.account;
+      return {
+        provider: 'aws',
+        accountId: account.id,
+        bucket: bucketName,
+        accessKeyId: account.access_key_id,
+        secretAccessKey: account.secret_access_key,
+        region: account.region,
+        endpointScheme: account.endpoint_scheme,
+        endpointHost: account.endpoint_host ?? undefined,
+        forcePathStyle: account.force_path_style,
+      };
+    }
+
+    const account = accountData.account;
+    return {
+      provider: accountData.provider,
+      accountId: account.id,
+      bucket: bucketName,
+      accessKeyId: account.access_key_id,
+      secretAccessKey: account.secret_access_key,
+      endpointScheme: account.endpoint_scheme,
+      endpointHost: account.endpoint_host,
+      forcePathStyle: accountData.provider === 'rustfs' ? true : account.force_path_style,
+    };
+  }
+
+  async function handleSyncBucket(accountData: ProviderAccount, bucketName: string, token?: Token) {
+    const config = buildSyncConfig(accountData, bucketName, token);
+    if (!config.accessKeyId || !config.secretAccessKey) {
+      message.error(`Missing credentials for ${bucketName} — add them in Settings to sync`);
+      return;
+    }
+    try {
+      await syncBucketNow(config);
+      message.success(`Syncing ${bucketName}…`);
+    } catch (e) {
+      message.error(`Failed to start sync: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function handleRevealMount(localPath: string) {
     try {
       const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
@@ -325,8 +389,30 @@ export default function AccountSidebar({
   ): MenuProps['items'] {
     const mount = findMount(mounts, accountData.provider, accountData.account.id, bucketName);
 
+    // "Sync now" runs against the *selected* bucket's client, and its
+    // progress/completion events are attributed to the current selection
+    // (backgroundSync is global in syncStore). Only offer it for the currently
+    // selected bucket to avoid stamping the wrong bucket's last-sync/counts.
+    const isCurrentBucket =
+      currentConfig?.provider === accountData.provider &&
+      currentConfig?.account_id === accountData.account.id &&
+      currentConfig?.bucket === bucketName;
+
+    const syncItem: NonNullable<MenuProps['items']>[number] | null = isCurrentBucket
+      ? {
+          key: 'sync',
+          label: 'Sync now',
+          icon: <SyncOutlined />,
+          onClick: (e) => {
+            e.domEvent.stopPropagation();
+            handleSyncBucket(accountData, bucketName, token);
+          },
+        }
+      : null;
+
     if (mount) {
       return [
+        ...(syncItem ? [syncItem] : []),
         {
           key: 'reveal',
           label: revealActionLabel(os),
@@ -350,6 +436,7 @@ export default function AccountSidebar({
     }
 
     return [
+      ...(syncItem ? [syncItem] : []),
       {
         key: 'mount',
         label: 'Mount as local drive',

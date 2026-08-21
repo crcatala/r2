@@ -221,8 +221,11 @@ export default function Home() {
     loadDownloads();
   }, [config?.bucket, config?.accountId, loadDownloadsFromDatabase]);
 
-  const { items, isLoading, isFetching, error, refresh } = useR2Files(config, currentPath);
-  const { isSyncing, isSynced, lastSyncTime, refresh: refreshSync } = useFilesSync(config);
+  const { items, isLoading, isFetching, error, refresh, forceRefreshFolder } = useR2Files(
+    config,
+    currentPath
+  );
+  const { isSyncing, isSynced, lastSyncTime } = useFilesSync(config);
 
   // Get sync phase for first-load overlay
   const syncPhase = useSyncStore((state) => state.phase);
@@ -685,15 +688,17 @@ export default function Home() {
     [config]
   );
 
+  // Toolbar refresh / ⌘R re-lists the current folder from the remote (fast,
+  // folder-scoped). Full-bucket re-sync is an explicit "Sync now" action in
+  // the sidebar bucket menu (r2-twoe).
   const handleRefresh = useCallback(async () => {
     try {
-      await refreshSync();
-      await refresh();
+      await forceRefreshFolder();
       message.success('Files refreshed');
     } catch {
       message.error('Failed to refresh files');
     }
-  }, [refresh, refreshSync, message]);
+  }, [forceRefreshFolder, message]);
 
   const handleDelete = useCallback(
     async (item: FileItem) => {

@@ -8,6 +8,9 @@
 import { Dropdown, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { DatabaseOutlined, MoreOutlined, RightOutlined } from '@ant-design/icons';
+import { useSyncStore } from '@/app/stores/syncStore';
+import { useSyncSettingsStore } from '@/app/stores/settingsStore';
+import { bucketSyncLabel, isStaleSync } from '@/app/utils/relativeTime';
 import {
   Token,
   ProviderAccount,
@@ -37,6 +40,8 @@ export function ProviderIcon({ provider }: { provider: Provider }) {
 
 interface BucketRowProps {
   bucketName: string;
+  /** Account owning the bucket — keys the per-bucket last-sync map. */
+  accountId: string;
   active: boolean;
   size?: string | null;
   onClick: () => void;
@@ -49,6 +54,7 @@ interface BucketRowProps {
 
 export function BucketRow({
   bucketName,
+  accountId,
   active,
   size,
   onClick,
@@ -56,6 +62,13 @@ export function BucketRow({
   mountedPath,
   onOpenMounts,
 }: BucketRowProps) {
+  const bucketSyncTimes = useSyncStore((s) => s.bucketSyncTimes);
+  const autoSyncMode = useSyncSettingsStore((s) => s.autoSyncMode);
+
+  const lastSyncMs = bucketSyncTimes[`${accountId}:${bucketName}`] ?? null;
+  const stale = isStaleSync({ autoSyncMode, lastSyncMs, nowMs: Date.now() });
+  const syncLabel = bucketSyncLabel({ lastSyncMs, stale });
+
   return (
     <div
       className={['sb-bucket-row', active ? 'active' : ''].filter(Boolean).join(' ')}
@@ -63,6 +76,20 @@ export function BucketRow({
     >
       <DatabaseOutlined className="sb-bucket-icon" style={{ fontSize: 12 }} />
       <span className="sb-bucket-name">{bucketName}</span>
+      {syncLabel ? (
+        <Tooltip
+          title={
+            stale
+              ? 'Auto-sync is off and this cache may not reflect remote changes. Use “Sync now” to refresh.'
+              : 'Last full sync'
+          }
+          placement="right"
+        >
+          <span className={['sb-bucket-sync', stale ? 'stale' : ''].filter(Boolean).join(' ')}>
+            {syncLabel}
+          </span>
+        </Tooltip>
+      ) : null}
       {mountedPath ? (
         onOpenMounts ? (
           <Tooltip title={`Mounted at ${mountedPath} — click to manage`} placement="right">
@@ -208,6 +235,7 @@ export function R2AccountChildren({
                 <BucketRow
                   key={bucket.name}
                   bucketName={bucket.name}
+                  accountId={accountData.account.id}
                   active={currentTokenId === token.id && currentBucket === bucket.name}
                   onClick={() => onSelectBucket(token.id, bucket.name)}
                   contextMenu={getBucketContextMenu(token, bucket.name)}
@@ -272,6 +300,7 @@ export function NonR2AccountChildren({
         <BucketRow
           key={bucket.name}
           bucketName={bucket.name}
+          accountId={accountData.account.id}
           active={isCurrentAccount && currentBucket === bucket.name}
           onClick={() => onSelectBucket(bucket.name)}
           contextMenu={getBucketContextMenu(bucket.name)}

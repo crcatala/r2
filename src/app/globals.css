@@ -1719,6 +1719,15 @@ html.dark .download-task-list > div::-webkit-scrollbar-thumb:hover {
   white-space: nowrap;
   flex-shrink: 0;
 }
+.sb-bucket-sync {
+  font-size: 10px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.sb-bucket-sync.stale {
+  color: var(--warning, #d97706);
+}
 
 .sb-pin {
   color: var(--text-subtle);

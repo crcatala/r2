@@ -232,6 +232,8 @@ export interface BucketSummary {
   lastModified: string | null;
   /** False while only partial lazy-browsed data is cached (no full sync yet). */
   isComplete: boolean;
+  /** Timestamp (ms) of the last completed full sync, persisted in sync_meta. Null if never fully synced. */
+  lastSync: number | null;
 }
 
 export async function getBucketSummary(): Promise<BucketSummary> {
@@ -325,6 +327,24 @@ export async function startBackgroundSync(config: StorageConfig): Promise<void> 
 
 export async function cancelBackgroundSync(): Promise<void> {
   return invoke('cancel_background_sync');
+}
+
+/**
+ * Force a full background sync of a bucket now, bypassing the auto-sync
+ * freshness gate. Single shared cancel/reset/start path used by the toolbar
+ * "Sync now" action and useFilesSync.refresh().
+ */
+export async function syncBucketNow(config: StorageConfig): Promise<void> {
+  // Wait for any pending cancel to complete first to avoid the
+  // cancel/start race where the new run_id is invalidated immediately.
+  try {
+    await cancelBackgroundSync();
+  } catch {}
+  const { useSyncStore } = await import('@/app/stores/syncStore');
+  useSyncStore.getState().resetProgress();
+  useSyncStore.getState().resetBackgroundSync();
+  useSyncStore.getState().startBackgroundSync();
+  await startBackgroundSync(config);
 }
 
 // Note: Upload state functions removed - now handled by backend upload_sessions table

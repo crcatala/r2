@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { getAllFiles, getFolderContents, listPrefix } from '@/app/lib/r2cache';
@@ -52,20 +52,18 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
     );
   }, [config]);
 
-  const query = useQuery({
-    queryKey,
-    queryFn: async (): Promise<FileItem[]> => {
+  /**
+   * Shared folder loader. forceRefresh=true bypasses the cache-first shortcut
+   * (TTL / authoritative-cache after full sync) and hits the network LIST.
+   */
+  const loadFolder = useCallback(
+    async (forceRefresh: boolean): Promise<FileItem[]> => {
       if (!config) return [];
-
       try {
-        // Cache-first: the backend serves straight from SQLite when the bucket
-        // is fully synced or the prefix's lazy listing is fresh, and only then
-        // pays for a network LIST. Manual refresh goes through useFilesSync's
-        // refresh(), which restarts a real background sync.
         const result = await loadFolderItems({
           config,
           prefix,
-          forceRefresh: false,
+          forceRefresh,
           readCachedFolder: getFolderContents,
           readAllCachedFiles: getAllFiles,
           readPrefixFolder: listPrefix,
@@ -77,10 +75,27 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
 
         return result.items;
       } catch (err) {
+        // No cache fallback was available — propagate so callers can tell a
+        // real failure apart from an empty folder. forceRefreshFolder must
+        // not overwrite the list with [] on failure (r2-twoe review).
         console.warn('[useR2Files] failed to load prefix and no cache fallback was available:', {
           prefix,
           err,
         });
+        throw err;
+      }
+    },
+    [config, prefix]
+  );
+
+  const query = useQuery({
+    queryKey,
+    // Preserve the pre-existing swallow for initial loads: a failed first
+    // load renders an empty list rather than surfacing an error state.
+    queryFn: async () => {
+      try {
+        return await loadFolder(false);
+      } catch {
         return [];
       }
     },
@@ -166,11 +181,25 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
     await queryClient.invalidateQueries({ queryKey });
   }
 
+  /**
+   * Re-list the current folder from the remote (bypasses the cache
+   * freshness shortcut) and write the result into the query cache.
+   * Throws when there is no cache fallback and the LIST fails, so callers
+   * (page.tsx handleRefresh) can toast a failure — the list is never
+   * overwritten with [] on error.
+   */
+  async function forceRefreshFolder() {
+    if (!config) return;
+    const items = await loadFolder(true);
+    queryClient.setQueryData<FileItem[]>(queryKey, items);
+  }
+
   return {
     items: query.data ?? [],
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     error: query.error,
     refresh,
+    forceRefreshFolder,
   };
 }
