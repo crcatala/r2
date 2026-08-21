@@ -32,6 +32,7 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
 
   // Get per-bucket sync time - only load from cache after sync completes
   const bucketSyncTimes = useSyncStore((state) => state.bucketSyncTimes);
+  const folderCacheTtlSecs = useSyncSettingsStore((s) => s.folderCacheTtlSecs);
   const lastSyncTime = useMemo(() => {
     if (!config?.accountId || !config?.bucket) return null;
     return useSyncStore.getState().getLastSyncTime(config.accountId, config.bucket);
@@ -74,6 +75,10 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
           readPrefixFolder: listPrefix,
         });
 
+        // Only a genuine network LIST (source 'prefix') marks the bucket as
+        // freshly browsed — a cache-served listing (from_cache) means nothing
+        // synced, so it must not stamp "Synced just now" on the sidebar or
+        // fool the freshness gate.
         if (result.source === 'prefix') {
           useSyncStore.getState().setLastSyncTime(config.accountId, config.bucket, Date.now());
         }
@@ -109,7 +114,10 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
     retry: 1,
     // Cache-updated events invalidate affected folders explicitly, so a
     // short staleTime only suppresses redundant remount/refocus refetches.
-    staleTime: 30_000,
+    // With the folder TTL set to "Always refresh" (0), every folder revisit
+    // must re-list from the network — go stale immediately so react-query
+    // cannot mask the setting (r2-ywug review).
+    staleTime: folderCacheTtlSecs === 0 ? 0 : 30_000,
     // Keep the previous folder on screen while the next one resolves —
     // navigation swaps lists instead of blanking.
     placeholderData: keepPreviousData,

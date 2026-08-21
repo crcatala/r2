@@ -27,6 +27,7 @@ globalThis.localStorage = {
 const {
   useSyncSettingsStore,
   shouldAutoSync,
+  shouldStartBackgroundSync,
   resolveBucketSyncSettings,
   makeBucketKey,
   DEFAULT_AUTO_SYNC_MODE,
@@ -93,6 +94,61 @@ describe('shouldAutoSync (freshness gate)', () => {
         lastSyncMs: NOW - 1,
         freshnessSecs: 0,
         nowMs: NOW,
+      })
+    ).toBe(true);
+  });
+
+  test('a never-synced bucket bootstraps even with global auto-sync off', () => {
+    // Real bootstrap: never fully synced + global Off -> one sync on first
+    // view, unless the bucket has an explicit "Never auto-sync" override.
+    expect(
+      shouldStartBackgroundSync({
+        mode: 'off',
+        lastSyncMs: null,
+        freshnessSecs: 60,
+        nowMs: NOW,
+        globalAutoSyncOff: true,
+        explicitlyOptedOut: false,
+      })
+    ).toBe(true);
+  });
+
+  test('bootstrap never overrides an explicit per-bucket opt-out', () => {
+    expect(
+      shouldStartBackgroundSync({
+        mode: 'off',
+        lastSyncMs: null,
+        freshnessSecs: 60,
+        nowMs: NOW,
+        globalAutoSyncOff: true,
+        explicitlyOptedOut: true,
+      })
+    ).toBe(false);
+  });
+
+  test('bootstrap only applies to never-synced buckets', () => {
+    expect(
+      shouldStartBackgroundSync({
+        mode: 'off',
+        lastSyncMs: NOW - 1,
+        freshnessSecs: 60,
+        nowMs: NOW,
+        globalAutoSyncOff: true,
+        explicitlyOptedOut: false,
+      })
+    ).toBe(false);
+  });
+
+  test('bootstrap is a no-op when the gate already decided', () => {
+    // on-switch + never synced already syncs via the normal gate.
+    expect(
+      shouldStartBackgroundSync({
+        mode: 'on-switch',
+        lastSyncMs: null,
+        freshnessSecs: 60,
+        nowMs: NOW,
+        globalAutoSyncOff: false,
+        explicitlyOptedOut: false,
       })
     ).toBe(true);
   });

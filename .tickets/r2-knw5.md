@@ -31,3 +31,7 @@ Phase 2. Add a periodic auto-sync: while a bucket is selected, re-run the backgr
 **2026-08-21T10:27:06Z**
 
 Implemented in PR (feat/r2-phase2-sync-ttl-periodic-overrides): autoSyncMode gains 'periodic' + autoSyncPeriodMin (5/15/30/60, default 15). useFilesSync schedules an interval that runs syncBucketNow for the current bucket, skips ticks while backgroundSync.isRunning, resets on config/settings change. Initial start still respects the freshness window. Settings Sync tab: mode segment + interval select.
+
+**2026-08-21T10:58:05Z**
+
+Review fixes: the auto-start effect now subscribes to sync settings, so enabling Periodic on the current bucket syncs immediately (freshness-gated) instead of waiting for the first interval; the periodic tick verifies the bucket is still the current selection before running syncBucketNow, closing the queued-tick race that could cancel the new bucket's sync and stamp the wrong last-sync.

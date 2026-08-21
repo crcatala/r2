@@ -92,7 +92,6 @@ export default function Home() {
   const [renameFolder, setRenameFolder] = useState<FileItem | null>(null);
   const currentPath = useCurrentPathStore((state) => state.currentPath);
   const setCurrentPath = useCurrentPathStore((state) => state.setCurrentPath);
-  const resetCurrentPath = useCurrentPathStore((state) => state.reset);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [searchQuery, setSearchQuery] = useState('');
   const [nameSort, setNameSort] = useState<SortOrder>(null);
@@ -167,7 +166,15 @@ export default function Home() {
   // Reset path and any pending/active Inspector selection when the storage
   // context changes. This prevents a delayed single-click from applying to a
   // file from the previous account or bucket.
+  //
+  // On the very first config load (app restart) we *restore* the last folder
+  // path for the restored bucket instead of resetting to root; on every
+  // subsequent bucket/account change we reset to root. Paths are persisted
+  // per-bucket (currentPathStore), so a restore can never apply to the wrong
+  // bucket.
+  const isFirstConfigRef = useRef(true);
   useEffect(() => {
+    if (!currentConfig) return;
     if (singleClickTimerRef.current) {
       clearTimeout(singleClickTimerRef.current);
       singleClickTimerRef.current = null;
@@ -175,7 +182,15 @@ export default function Home() {
     setFocusedItem(null);
     setShowInspector(false);
 
-    resetCurrentPath();
+    const pathStore = useCurrentPathStore.getState();
+    const bucketKey = `${currentConfig.provider}:${currentConfig.account_id}:${currentConfig.bucket}`;
+    if (isFirstConfigRef.current) {
+      isFirstConfigRef.current = false;
+      pathStore.restorePath(bucketKey);
+    } else {
+      pathStore.setBucketKey(bucketKey);
+      pathStore.reset();
+    }
     setSearchQuery('');
     resetBatchOperation();
   }, [
@@ -184,7 +199,6 @@ export default function Home() {
     currentConfig?.provider,
     currentConfig?.token_id,
     resetBatchOperation,
-    resetCurrentPath,
     setShowInspector,
   ]);
 

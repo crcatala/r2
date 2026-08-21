@@ -141,43 +141,48 @@ pub async fn list_prefix(
     let ttl_secs = input.cache_ttl_secs.unwrap_or(60);
     let force_refresh = input.force_refresh.unwrap_or(false);
 
-    if !force_refresh {
-        // A completed full sync makes the local cache authoritative for the
-        // whole bucket — background sync and incremental cache updates keep it
-        // fresh, so browsing never needs to wait on a network LIST. Without a
-        // full sync, fall back to the per-prefix lazy TTL (configurable via
-        // cache_ttl_secs, r2-ywug).
-        let has_full_sync = db::has_full_sync(bucket, account_id)
-            .await
-            .map_err(|e| format!("DB error: {}", e))?;
+    // A completed full sync makes the local cache authoritative for the
+    // whole bucket — background sync and incremental cache updates keep it
+    // fresh, so browsing never needs to wait on a network LIST. Without a
+    // full sync, fall back to the per-prefix lazy TTL (configurable via
+    // cache_ttl_secs, r2-ywug; 0 always hits the network). Short-circuit the
+    // prefix-sync read when a full sync exists — one less SQLite query per
+    // browse on the common path.
+    let serve_cache = if force_refresh {
+        false
+    } else if db::has_full_sync(bucket, account_id)
+        .await
+        .map_err(|e| format!("DB error: {}", e))?
+    {
+        true
+    } else {
         let cached_time = db::prefix_sync::get_prefix_sync_time(bucket, account_id, prefix)
             .await
             .map_err(|e| format!("DB error: {}", e))?;
         let now = chrono::Utc::now().timestamp();
-        let serve_cache =
-            should_serve_from_cache(force_refresh, has_full_sync, cached_time, ttl_secs, now);
+        should_serve_from_cache(false, false, cached_time, ttl_secs, now)
+    };
 
-        if serve_cache {
-            let contents = db::get_folder_contents(bucket, account_id, prefix)
-                .await
-                .map_err(|e| format!("DB error: {}", e))?;
+    if serve_cache {
+        let contents = db::get_folder_contents(bucket, account_id, prefix)
+            .await
+            .map_err(|e| format!("DB error: {}", e))?;
 
-            return Ok(LazyListResult {
-                files: contents
-                    .files
-                    .into_iter()
-                    .map(|f| LazyFileItem {
-                        name: f.name,
-                        key: f.key,
-                        size: f.size,
-                        last_modified: f.last_modified,
-                    })
-                    .collect(),
-                folders: contents.folders,
-                prefix: prefix.clone(),
-                from_cache: true,
-            });
-        }
+        return Ok(LazyListResult {
+            files: contents
+                .files
+                .into_iter()
+                .map(|f| LazyFileItem {
+                    name: f.name,
+                    key: f.key,
+                    size: f.size,
+                    last_modified: f.last_modified,
+                })
+                .collect(),
+            folders: contents.folders,
+            prefix: prefix.clone(),
+            from_cache: true,
+        });
     }
 
     // Cache is stale or missing -- fetch from S3

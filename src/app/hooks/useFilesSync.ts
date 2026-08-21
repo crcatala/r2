@@ -12,7 +12,7 @@ import { useFolderSizeStore } from '@/app/stores/folderSizeStore';
 import { useSyncStore, SyncPhase } from '@/app/stores/syncStore';
 import {
   useSyncSettingsStore,
-  shouldAutoSync,
+  shouldStartBackgroundSync,
   resolveBucketSyncSettings,
   makeBucketKey,
 } from '@/app/stores/settingsStore';
@@ -142,18 +142,39 @@ export function useFilesSync(config: StorageConfig | null) {
     );
   }, [config]);
 
+  // Effective sync settings for the current bucket (r2-c6gg): per-bucket
+  // overrides win field-by-field over globals. Subscribed reactively so the
+  // auto-start effect below re-evaluates when the user changes the mode —
+  // e.g. enabling Periodic on the current bucket syncs now instead of
+  // waiting for the first interval (r2-knw5 review).
+  const autoSyncMode = useSyncSettingsStore((s) => s.autoSyncMode);
+  const autoSyncFreshnessSecs = useSyncSettingsStore((s) => s.autoSyncFreshnessSecs);
+  const autoSyncPeriodMin = useSyncSettingsStore((s) => s.autoSyncPeriodMin);
+  const bucketOverrides = useSyncSettingsStore((s) => s.bucketOverrides);
+
   // Auto-start background sync when bucket/account/provider changes.
   // Gated by the freshness window (r2-pkmv): a bucket fully synced recently
   // is skipped — the local cache is authoritative after a full sync, so
-  // re-listing it immediately gains nothing. Settings changes take effect on
-  // the next bucket switch; "Sync now" remains available for immediate sync.
+  // re-listing it immediately gains nothing. Re-runs on settings changes so
+  // a mode change (e.g. to Periodic) takes effect immediately; "Sync now"
+  // remains available for immediate sync.
+  const autoStartConfigRef = useRef<StorageConfig | null>(null);
+
   useEffect(() => {
     if (!isConfigReady || !config) return;
+    autoStartConfigRef.current = config;
 
     const bucketKey = makeBucketKey(config.provider, config.accountId, config.bucket);
-    if (bgStartedRef.current === bucketKey) return; // Already started for this bucket
+    const isSameBucket = bgStartedRef.current === bucketKey;
 
-    bgStartedRef.current = bucketKey;
+    if (isSameBucket) {
+      // This re-run was caused by a settings change, not a bucket switch.
+      // Never interrupt an in-flight sync — let it finish; the next trigger
+      // (switch, mode change, refresh) re-evaluates.
+      if (useSyncStore.getState().backgroundSync.isRunning) return;
+    } else {
+      bgStartedRef.current = bucketKey;
+    }
 
     let cancelled = false;
     const run = async () => {
@@ -185,11 +206,17 @@ export function useFilesSync(config: StorageConfig | null) {
       const lastSync = useSyncStore.getState().getLastSyncTime(config.accountId, config.bucket);
       // Per-bucket overrides (r2-c6gg) win field-by-field over global settings.
       const resolved = resolveBucketSyncSettings(bucketKey, settings.bucketOverrides, settings);
-      const shouldSync = shouldAutoSync({
+      // A bucket that has *never* been fully synced gets one full sync on its
+      // first view even with global auto-sync Off (bootstrap — see
+      // shouldStartBackgroundSync). An explicit per-bucket "Never auto-sync"
+      // override still wins.
+      const shouldSync = shouldStartBackgroundSync({
         mode: resolved.mode,
         lastSyncMs: lastSync,
         freshnessSecs: resolved.freshnessSecs,
         nowMs: Date.now(),
+        globalAutoSyncOff: settings.autoSyncMode === 'off',
+        explicitlyOptedOut: settings.bucketOverrides[bucketKey]?.autoSyncMode === 'off',
       });
 
       if (!shouldSync) {
@@ -230,19 +257,37 @@ export function useFilesSync(config: StorageConfig | null) {
 
     return () => {
       cancelled = true;
-      cancelBackgroundSync().catch(() => {});
-      bgStartedRef.current = null;
+      // Cancel the backend only when leaving this bucket — a settings-only
+      // re-run must not cancel an in-flight sync (review). bgStartedRef stays
+      // set on a settings re-run so the effect recognizes it as the same
+      // bucket next time.
+      const latest = autoStartConfigRef.current;
+      const leftBucket =
+        latest == null ||
+        latest.provider !== config.provider ||
+        latest.accountId !== config.accountId ||
+        latest.bucket !== config.bucket;
+      if (leftBucket) {
+        cancelBackgroundSync().catch(() => {});
+        bgStartedRef.current = null;
+      }
     };
-  }, [isConfigReady, config?.provider, config?.accountId, config?.bucket, queryClient]);
+  }, [
+    isConfigReady,
+    config?.provider,
+    config?.accountId,
+    config?.bucket,
+    autoSyncMode,
+    autoSyncFreshnessSecs,
+    autoSyncPeriodMin,
+    bucketOverrides,
+    queryClient,
+  ]);
 
   // Periodic auto-sync (r2-knw5 + r2-c6gg): while the resolved mode for the
   // current bucket is 'periodic', re-run the full background sync every
   // periodMin. The interval resets on config/settings changes; a tick is
   // skipped while any sync is already in flight so runs never overlap.
-  const autoSyncMode = useSyncSettingsStore((s) => s.autoSyncMode);
-  const autoSyncPeriodMin = useSyncSettingsStore((s) => s.autoSyncPeriodMin);
-  const bucketOverrides = useSyncSettingsStore((s) => s.bucketOverrides);
-
   useEffect(() => {
     if (!isConfigReady || !config) return;
 
@@ -257,6 +302,14 @@ export function useFilesSync(config: StorageConfig | null) {
     const periodMs = resolved.periodMin * 60_000;
     const id = window.setInterval(async () => {
       if (useSyncStore.getState().backgroundSync.isRunning) return;
+      // A tick queued before the interval was torn down can fire after a
+      // bucket switch. syncBucketNow cancels the running sync first, so a
+      // stale tick would cancel the new bucket's sync and re-list the old
+      // bucket (stamping the wrong last-sync/counts). Skip unless this tick's
+      // bucket is still the current selection (r2-knw5 review).
+      if (useSyncStore.getState().currentBucketKey !== `${config.accountId}:${config.bucket}`) {
+        return;
+      }
       try {
         await syncBucketNow(config);
       } catch (err) {

@@ -1,5 +1,6 @@
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 interface CacheUpdatedEvent {
   action: 'delete' | 'move' | 'update';
@@ -16,10 +17,17 @@ interface PathsCreatedEvent {
 
 interface CurrentPathStore {
   currentPath: string;
+  /** Bucket currently being browsed — paths are recorded under this key. */
+  bucketKey: string | null;
+  /** Persisted: last folder path per bucket ("<provider>:<account>:<bucket>"). */
+  pathsByBucket: Record<string, string>;
   cacheUpdatedPaths: string[];
   removedPaths: string[];
   createdPaths: string[];
+  setBucketKey: (key: string | null) => void;
   setCurrentPath: (path: string) => void;
+  /** Restore the last path for a bucket (app startup) and select that bucket. */
+  restorePath: (key: string) => void;
   goToParent: () => void;
   reset: () => void;
 }
@@ -32,18 +40,51 @@ function getParentPath(path: string): string {
   return `${withoutTrailing.slice(0, lastSlash + 1)}`;
 }
 
-export const useCurrentPathStore = create<CurrentPathStore>((set, get) => ({
-  currentPath: '',
-  cacheUpdatedPaths: [],
-  removedPaths: [],
-  createdPaths: [],
-  setCurrentPath: (path) => set({ currentPath: path }),
-  goToParent: () => {
-    const { currentPath } = get();
-    set({ currentPath: getParentPath(currentPath) });
-  },
-  reset: () => set({ currentPath: '' }),
-}));
+export const useCurrentPathStore = create<CurrentPathStore>()(
+  persist(
+    (set, get) => ({
+      currentPath: '',
+      bucketKey: null,
+      pathsByBucket: {},
+      cacheUpdatedPaths: [],
+      removedPaths: [],
+      createdPaths: [],
+      setBucketKey: (key) => set({ bucketKey: key }),
+      setCurrentPath: (path) =>
+        set((state) => ({
+          currentPath: path,
+          ...(state.bucketKey
+            ? { pathsByBucket: { ...state.pathsByBucket, [state.bucketKey]: path } }
+            : {}),
+        })),
+      restorePath: (key) =>
+        set((state) => ({ bucketKey: key, currentPath: state.pathsByBucket[key] ?? '' })),
+      goToParent: () => {
+        const { currentPath } = get();
+        get().setCurrentPath(getParentPath(currentPath));
+      },
+      reset: () => set({ currentPath: '' }),
+    }),
+    {
+      name: 'current-path-storage',
+      version: 2,
+      // Persist only the per-bucket paths; the live path and event batches
+      // are session state.
+      partialize: (state) => ({ pathsByBucket: state.pathsByBucket }),
+      migrate: (persistedState, version) => {
+        const incoming = (persistedState ?? {}) as Partial<CurrentPathStore>;
+        if (version < 2) {
+          // v1 stored a single global currentPath with no bucket context —
+          // not safely restorable (it could apply to the wrong bucket), so
+          // drop it and start the per-bucket map empty.
+          return { pathsByBucket: {} } as CurrentPathStore;
+        }
+        return incoming as CurrentPathStore;
+      },
+      storage: createJSONStorage(() => localStorage),
+    }
+  )
+);
 
 let unlistenCacheUpdated: UnlistenFn | undefined;
 let unlistenPathsRemoved: UnlistenFn | undefined;

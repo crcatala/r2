@@ -39,7 +39,14 @@ export interface ListPrefixOptions {
 
 export interface LoadFolderItemsResult {
   items: FileItem[];
-  source: 'prefix' | 'cache-fallback' | 'all-cache-fallback';
+  /**
+   * 'prefix' = the remote LIST ran (from_cache: false) and returned live data;
+   * 'cache-prefix' = the backend served the prefix from SQLite (from_cache: true);
+   * 'cache-fallback' / 'all-cache-fallback' = the LIST failed and we fell back.
+   * Only 'prefix' counts as a network round-trip — callers use this to avoid
+   * stamping a fake "last synced" time when nothing was fetched (r2-ywug fix).
+   */
+  source: 'prefix' | 'cache-prefix' | 'cache-fallback' | 'all-cache-fallback';
 }
 
 interface LoadFolderItemsOptions<Config> {
@@ -153,7 +160,9 @@ export async function loadFolderItems<Config>({
     const prefixResult = await readPrefixFolder(config, prefix, { forceRefresh, cacheTtlSecs });
     return {
       items: buildFileItems(lazyFilesToStored(prefixResult.files), prefixResult.folders, prefix),
-      source: 'prefix',
+      // A cache-served listing (from_cache) is not a network round-trip —
+      // surface it so callers don't treat it as a fresh sync.
+      source: prefixResult.from_cache ? 'cache-prefix' : 'prefix',
     };
   } catch (err) {
     if (hasFolderContents(cached)) {
