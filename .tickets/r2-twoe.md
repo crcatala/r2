@@ -36,3 +36,7 @@ Toolbar refresh = folder-level (expectation: "show me fresh data here, fast"). F
 **2026-08-21T09:24:35Z**
 
 Phase 1 implemented in PR #5 (feat/r2-bctw-sync-freshness-controls). Awaiting review/merge; close on merge.
+
+**2026-08-21T09:54:51Z**
+
+Review fixes applied in PR #5: unit conversion (sec->ms) at hydration + clear browse stamp for partial buckets; Sync now restricted to current bucket + added to mounted menu; forceRefreshFolder no longer empties list on failed LIST.

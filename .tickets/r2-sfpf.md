@@ -35,3 +35,7 @@ Uses the hydrated bucketSyncTimes (r2-vq87 + hydration in r2-pkmv), so times sur
 **2026-08-21T09:24:35Z**
 
 Phase 1 implemented in PR #5 (feat/r2-bctw-sync-freshness-controls). Awaiting review/merge; close on merge.
+
+**2026-08-21T09:54:51Z**
+
+Deferred per review: multi-bucket last-sync hydration needs parameterized get_last_sync; browse-stamp display cosmetic.
