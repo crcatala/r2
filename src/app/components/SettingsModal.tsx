@@ -23,6 +23,8 @@ interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   initialTab?: SettingsTab;
+  /** Bucket override to highlight in the Sync panel (opened from sidebar "Sync settings…"). */
+  initialBucketOverrideKey?: string;
   initialAccountId?: string;
   /** @deprecated kept for compatibility — no longer used by this modal */
   onOpenAccountSettings?: () => void;
@@ -427,6 +429,7 @@ export default function SettingsModal({
   open,
   onClose,
   initialTab = 'appearance',
+  initialBucketOverrideKey,
   initialAccountId,
   onOpenAccountSettings: _onOpenAccountSettings,
 }: SettingsModalProps) {
@@ -509,7 +512,7 @@ export default function SettingsModal({
           {tab === 'shortcuts' && <ShortcutsPanel />}
           {tab === 'account' && <SettingsAccountPanel initialAccountId={initialAccountId} />}
           {tab === 'mounts' && <SettingsMountsPanel />}
-          {tab === 'sync' && <SettingsSyncPanel />}
+          {tab === 'sync' && <SettingsSyncPanel highlightBucketKey={initialBucketOverrideKey} />}
         </div>
       </div>
     </Modal>

@@ -274,6 +274,8 @@ export interface LazyListResult {
 
 export interface ListPrefixOptions {
   forceRefresh?: boolean;
+  /** Folder browse TTL in seconds (r2-ywug); omitting keeps the backend default of 60. */
+  cacheTtlSecs?: number;
 }
 
 /** Build the full connection input for lazy sync commands (provider-aware) */
@@ -314,9 +316,17 @@ export async function listPrefix(
   prefix: string,
   options: ListPrefixOptions = {}
 ): Promise<LazyListResult> {
-  return invoke('list_prefix', {
-    input: { ...getConnectionInput(config), prefix, force_refresh: options.forceRefresh ?? false },
-  });
+  const input: Record<string, unknown> = {
+    ...getConnectionInput(config),
+    prefix,
+    force_refresh: options.forceRefresh ?? false,
+  };
+  // Only send the TTL when explicitly set — undefined keys are dropped by
+  // JSON serialization, and the backend defaults to 60s when absent.
+  if (options.cacheTtlSecs !== undefined) {
+    input.cache_ttl_secs = options.cacheTtlSecs;
+  }
+  return invoke('list_prefix', { input });
 }
 
 export async function startBackgroundSync(config: StorageConfig): Promise<void> {

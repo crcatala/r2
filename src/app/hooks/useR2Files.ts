@@ -4,6 +4,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { getAllFiles, getFolderContents, listPrefix } from '@/app/lib/r2cache';
 import { StorageConfig } from '@/app/lib/r2cache';
 import { useSyncStore } from '@/app/stores/syncStore';
+import { useSyncSettingsStore } from '@/app/stores/settingsStore';
 import { useCurrentPathStore } from '@/app/stores/currentPathStore';
 import { loadFolderItems } from '@/app/utils/folderItems';
 import type { FileItem } from '@/app/utils/folderItems';
@@ -64,6 +65,10 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
           config,
           prefix,
           forceRefresh,
+          // Folder browse TTL (r2-ywug): sent to list_prefix so the backend
+          // serves a partial-cache prefix within this window from SQLite.
+          // Only matters before the bucket's first full sync.
+          cacheTtlSecs: useSyncSettingsStore.getState().folderCacheTtlSecs,
           readCachedFolder: getFolderContents,
           readAllCachedFiles: getAllFiles,
           readPrefixFolder: listPrefix,

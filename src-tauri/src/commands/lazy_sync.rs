@@ -24,6 +24,40 @@ pub struct LazyListInput {
     pub force_path_style: Option<bool>,
     pub region: Option<String>,
     pub force_refresh: Option<bool>,
+    // Folder browse TTL (r2-ywug): how stale a partial-cache prefix may be
+    // before list_prefix hits the network. Only consulted when the bucket
+    // has no completed full sync (after a full sync the cache is
+    // authoritative and the TTL is moot). Default 60s preserves today's
+    // behavior; 0 always hits the network.
+    pub cache_ttl_secs: Option<i64>,
+}
+
+/// Decide whether list_prefix serves a folder from the local cache instead
+/// of hitting the remote. Pure so the threshold logic is unit-testable.
+///
+/// - `force_refresh` bypasses every cache path (toolbar refresh / ⌘R).
+/// - A completed full sync makes the whole-bucket cache authoritative, so
+///   partial-prefix browsing never needs a network LIST.
+/// - Otherwise the per-prefix browse TTL applies: a prefix listed within
+///   `ttl_secs` is served from cache; `ttl_secs <= 0` always hits the
+///   network ("TTL off" -> every folder open re-lists).
+pub fn should_serve_from_cache(
+    force_refresh: bool,
+    has_full_sync: bool,
+    prefix_synced_at: Option<i64>, // unix seconds, None = never browsed
+    ttl_secs: i64,
+    now: i64,
+) -> bool {
+    if force_refresh {
+        return false;
+    }
+    if has_full_sync {
+        return true;
+    }
+    if ttl_secs <= 0 {
+        return false;
+    }
+    matches!(prefix_synced_at, Some(synced_at) if now - synced_at < ttl_secs)
 }
 
 // ============ Provider-Aware Client Factory ============
@@ -104,25 +138,24 @@ pub async fn list_prefix(
     let account_id = &input.account_id;
     let prefix = &input.prefix;
 
-    const STALE_THRESHOLD_SECS: i64 = 60;
+    let ttl_secs = input.cache_ttl_secs.unwrap_or(60);
+    let force_refresh = input.force_refresh.unwrap_or(false);
 
-    if !input.force_refresh.unwrap_or(false) {
+    if !force_refresh {
         // A completed full sync makes the local cache authoritative for the
         // whole bucket — background sync and incremental cache updates keep it
         // fresh, so browsing never needs to wait on a network LIST. Without a
-        // full sync, fall back to the per-prefix lazy TTL.
-        let serve_cache = if db::has_full_sync(bucket, account_id)
+        // full sync, fall back to the per-prefix lazy TTL (configurable via
+        // cache_ttl_secs, r2-ywug).
+        let has_full_sync = db::has_full_sync(bucket, account_id)
             .await
-            .map_err(|e| format!("DB error: {}", e))?
-        {
-            true
-        } else {
-            let cached_time = db::prefix_sync::get_prefix_sync_time(bucket, account_id, prefix)
-                .await
-                .map_err(|e| format!("DB error: {}", e))?;
-            let now = chrono::Utc::now().timestamp();
-            matches!(cached_time, Some(synced_at) if now - synced_at < STALE_THRESHOLD_SECS)
-        };
+            .map_err(|e| format!("DB error: {}", e))?;
+        let cached_time = db::prefix_sync::get_prefix_sync_time(bucket, account_id, prefix)
+            .await
+            .map_err(|e| format!("DB error: {}", e))?;
+        let now = chrono::Utc::now().timestamp();
+        let serve_cache =
+            should_serve_from_cache(force_refresh, has_full_sync, cached_time, ttl_secs, now);
 
         if serve_cache {
             let contents = db::get_folder_contents(bucket, account_id, prefix)
@@ -587,4 +620,102 @@ pub async fn cancel_background_sync() -> Result<(), String> {
     BACKGROUND_RUN_ID.fetch_add(1, Ordering::SeqCst);
     BACKGROUND_CANCEL.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+// ============ Unit Tests (r2-ywug) ============
+
+#[cfg(test)]
+mod tests {
+    use super::should_serve_from_cache;
+
+    const NOW: i64 = 1_000_000;
+    const TTL: i64 = 60;
+
+    #[test]
+    fn force_refresh_never_serves_cache_even_when_full_sync_is_fresh() {
+        assert!(!should_serve_from_cache(
+            true,
+            true,
+            Some(NOW - 1),
+            TTL,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn completed_full_sync_makes_cache_authoritative_regardless_of_ttl() {
+        // Full sync exists -> cache wins even with TTL off and a stale prefix.
+        assert!(should_serve_from_cache(
+            false,
+            true,
+            Some(NOW - 10_000),
+            TTL,
+            NOW
+        ));
+        assert!(should_serve_from_cache(false, true, None, TTL, NOW));
+        assert!(should_serve_from_cache(false, true, Some(NOW - 1), 0, NOW));
+    }
+
+    #[test]
+    fn fresh_prefix_within_ttl_serves_from_cache() {
+        assert!(should_serve_from_cache(
+            false,
+            false,
+            Some(NOW - 30),
+            TTL,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn stale_prefix_beyond_ttl_hits_network() {
+        assert!(!should_serve_from_cache(
+            false,
+            false,
+            Some(NOW - 60),
+            TTL,
+            NOW
+        ));
+        assert!(!should_serve_from_cache(
+            false,
+            false,
+            Some(NOW - 61),
+            TTL,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn ttl_zero_forces_network_list_even_when_prefix_is_fresh() {
+        assert!(!should_serve_from_cache(
+            false,
+            false,
+            Some(NOW - 1),
+            0,
+            NOW
+        ));
+        assert!(!should_serve_from_cache(
+            false,
+            false,
+            Some(NOW - 1),
+            -5,
+            NOW
+        ));
+    }
+
+    #[test]
+    fn never_browsed_prefix_hits_network() {
+        assert!(!should_serve_from_cache(false, false, None, TTL, NOW));
+    }
+
+    #[test]
+    fn exactly_at_ttl_boundary_is_stale() {
+        assert!(!should_serve_from_cache(
+            false,
+            false,
+            Some(NOW - TTL),
+            TTL,
+            NOW
+        ));
+    }
 }
