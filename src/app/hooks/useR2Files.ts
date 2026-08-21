@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { getAllFiles, getFolderContents, listPrefix } from '@/app/lib/r2cache';
@@ -52,20 +52,18 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
     );
   }, [config]);
 
-  const query = useQuery({
-    queryKey,
-    queryFn: async (): Promise<FileItem[]> => {
+  /**
+   * Shared folder loader. forceRefresh=true bypasses the cache-first shortcut
+   * (TTL / authoritative-cache after full sync) and hits the network LIST.
+   */
+  const loadFolder = useCallback(
+    async (forceRefresh: boolean): Promise<FileItem[]> => {
       if (!config) return [];
-
       try {
-        // Cache-first: the backend serves straight from SQLite when the bucket
-        // is fully synced or the prefix's lazy listing is fresh, and only then
-        // pays for a network LIST. Manual refresh goes through useFilesSync's
-        // refresh(), which restarts a real background sync.
         const result = await loadFolderItems({
           config,
           prefix,
-          forceRefresh: false,
+          forceRefresh,
           readCachedFolder: getFolderContents,
           readAllCachedFiles: getAllFiles,
           readPrefixFolder: listPrefix,
@@ -84,6 +82,12 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
         return [];
       }
     },
+    [config, prefix]
+  );
+
+  const query = useQuery({
+    queryKey,
+    queryFn: () => loadFolder(false),
     // Enable immediately when config is ready — lazy sync handles missing cache
     enabled: isConfigReady,
     retry: 1,
@@ -166,11 +170,24 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
     await queryClient.invalidateQueries({ queryKey });
   }
 
+  /**
+   * Re-list the current folder from the remote (bypasses the cache
+   * freshness shortcut) and write the result into the query cache.
+   * Toolbar refresh / ⌘R use this; upload/delete/move invalidation keeps
+   * using refresh() so it stays cache-friendly.
+   */
+  async function forceRefreshFolder() {
+    if (!config) return;
+    const items = await loadFolder(true);
+    queryClient.setQueryData<FileItem[]>(queryKey, items);
+  }
+
   return {
     items: query.data ?? [],
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     error: query.error,
     refresh,
+    forceRefreshFolder,
   };
 }

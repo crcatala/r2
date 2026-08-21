@@ -530,6 +530,9 @@ pub struct BucketSummary {
     /// from a finished sync, or a sync_meta row proving a full sync completed).
     /// False for partial data gathered by lazy per-folder browsing.
     pub is_complete: bool,
+    /// Timestamp of the last completed full sync (sync_meta.last_sync), if any.
+    /// Survives restarts, unlike the frontend's in-memory bucketSyncTimes.
+    pub last_sync: Option<i64>,
 }
 
 /// Whether a full bucket sync has completed (sync_meta row exists). While a
@@ -546,6 +549,22 @@ pub async fn has_full_sync(bucket: &str, account_id: &str) -> DbResult<bool> {
     Ok(meta_rows.next().await?.is_some())
 }
 
+/// Timestamp of the last completed full sync for a bucket, if any.
+/// None means the bucket was never fully synced (lazy-only browsing).
+pub async fn get_last_sync(bucket: &str, account_id: &str) -> DbResult<Option<i64>> {
+    let conn = get_connection()?.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT last_sync FROM sync_meta WHERE bucket = ?1 AND account_id = ?2",
+            turso::params![bucket, account_id],
+        )
+        .await?;
+    Ok(match rows.next().await? {
+        Some(row) => Some(row.get(0)?),
+        None => None,
+    })
+}
+
 /// Get a bucket-wide summary (total file count + total size).
 ///
 /// Resolution order:
@@ -560,6 +579,8 @@ pub async fn get_bucket_summary(bucket: &str, account_id: &str) -> DbResult<Buck
     // (complete) from not-yet-synced lazy data in the aggregate fallback.
     let has_full_sync = has_full_sync(bucket, account_id).await?;
 
+    let last_sync = get_last_sync(bucket, account_id).await?;
+
     if has_full_sync {
         if let Some(root) = get_directory_node(bucket, account_id, "").await? {
             return Ok(BucketSummary {
@@ -567,6 +588,7 @@ pub async fn get_bucket_summary(bucket: &str, account_id: &str) -> DbResult<Buck
                 total_size: root.total_size,
                 last_modified: root.last_modified,
                 is_complete: true,
+                last_sync,
             });
         }
     }
@@ -588,6 +610,7 @@ pub async fn get_bucket_summary(bucket: &str, account_id: &str) -> DbResult<Buck
             total_size: row.get(1)?,
             last_modified: row.get(2)?,
             is_complete: has_full_sync,
+            last_sync,
         })
     } else {
         Ok(BucketSummary {
@@ -595,6 +618,7 @@ pub async fn get_bucket_summary(bucket: &str, account_id: &str) -> DbResult<Buck
             total_size: 0,
             last_modified: None,
             is_complete: has_full_sync,
+            last_sync,
         })
     }
 }

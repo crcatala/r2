@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
-import { startBackgroundSync, cancelBackgroundSync, StorageConfig } from '@/app/lib/r2cache';
+import {
+  startBackgroundSync,
+  cancelBackgroundSync,
+  getBucketSummary,
+  syncBucketNow,
+  StorageConfig,
+} from '@/app/lib/r2cache';
 import { useFolderSizeStore } from '@/app/stores/folderSizeStore';
 import { useSyncStore, SyncPhase } from '@/app/stores/syncStore';
+import { useSyncSettingsStore, shouldAutoSync } from '@/app/stores/settingsStore';
 
 interface BackgroundSyncProgressEvent {
   objects_fetched: number;
@@ -130,7 +137,11 @@ export function useFilesSync(config: StorageConfig | null) {
     );
   }, [config]);
 
-  // Auto-start background sync when bucket/account/provider changes
+  // Auto-start background sync when bucket/account/provider changes.
+  // Gated by the freshness window (r2-pkmv): a bucket fully synced recently
+  // is skipped — the local cache is authoritative after a full sync, so
+  // re-listing it immediately gains nothing. Settings changes take effect on
+  // the next bucket switch; "Sync now" remains available for immediate sync.
   useEffect(() => {
     if (!isConfigReady || !config) return;
 
@@ -141,6 +152,40 @@ export function useFilesSync(config: StorageConfig | null) {
 
     let cancelled = false;
     const run = async () => {
+      // Hydrate the persisted last-sync time (sync_meta) up front so isSynced
+      // and the StatusBar/sidebar reflect stored state even when we skip,
+      // and so the gate has a timestamp to compare against after restarts.
+      try {
+        const summary = await getBucketSummary();
+        if (cancelled) return;
+        if (summary.lastSync != null) {
+          useSyncStore
+            .getState()
+            .setLastSyncTime(config.accountId, config.bucket, summary.lastSync);
+        }
+      } catch {
+        // Non-fatal: the gate falls back to syncing.
+      }
+      if (cancelled) return;
+
+      const settings = useSyncSettingsStore.getState();
+      const lastSync = useSyncStore.getState().getLastSyncTime(config.accountId, config.bucket);
+      const shouldSync = shouldAutoSync({
+        mode: settings.autoSyncMode,
+        lastSyncMs: lastSync,
+        freshnessSecs: settings.autoSyncFreshnessSecs,
+        nowMs: Date.now(),
+      });
+
+      if (!shouldSync) {
+        // Fresh enough or auto-sync off: serve from the local cache. Still
+        // invalidate folder queries so the view settles on this bucket's data.
+        queryClient.invalidateQueries({
+          queryKey: ['folder-contents', config.provider, config.accountId, config.bucket],
+        });
+        return;
+      }
+
       // Wait for any pending cancel to complete first to avoid the
       // cancel/start race where the new run_id is invalidated immediately.
       try {
@@ -178,30 +223,21 @@ export function useFilesSync(config: StorageConfig | null) {
   // Background sync state for return values
   const backgroundSync = useSyncStore((state) => state.backgroundSync);
 
+  /**
+   * Force a full-bucket background sync now, bypassing the freshness gate.
+   * Shared with the sidebar "Sync now" action (r2-twoe).
+   */
   const refresh = useCallback(async () => {
     if (!config) return;
 
-    // Cancel current background sync and restart
-    try {
-      await cancelBackgroundSync();
-    } catch {
-      // Ignore cancel errors
-    }
-
     clearSizes();
-    useSyncStore.getState().resetProgress();
-    useSyncStore.getState().resetBackgroundSync();
     bgStartedRef.current = null;
 
-    // Restart background sync
-    useSyncStore.getState().startBackgroundSync();
-    const bucketKey = `${config.accountId}:${config.bucket}`;
-    bgStartedRef.current = bucketKey;
-
     try {
-      await startBackgroundSync(config);
+      await syncBucketNow(config);
     } catch (err) {
       console.error('Failed to restart background sync:', err);
+      useSyncStore.getState().failBackgroundSync(err instanceof Error ? err.message : String(err));
     }
 
     // Also invalidate folder-contents so useR2Files refetches current folder

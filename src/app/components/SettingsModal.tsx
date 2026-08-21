@@ -8,14 +8,16 @@ import {
   UnorderedListOutlined,
   CheckOutlined,
   LinkOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import { useThemeStore } from '@/app/stores/themeStore';
 import { ACCENT_LIST } from '@/app/lib/accent';
 import Modal from '@/app/components/ui/Modal';
 import SettingsAccountPanel from '@/app/components/SettingsAccountPanel';
 import SettingsMountsPanel from '@/app/components/SettingsMountsPanel';
+import SettingsSyncPanel from '@/app/components/SettingsSyncPanel';
 
-export type SettingsTab = 'appearance' | 'layout' | 'account' | 'mounts' | 'shortcuts';
+export type SettingsTab = 'appearance' | 'layout' | 'account' | 'mounts' | 'sync' | 'shortcuts';
 
 interface SettingsModalProps {
   open: boolean;
@@ -439,6 +441,7 @@ export default function SettingsModal({
     { id: 'layout', label: 'Layout', icon: <AppstoreOutlined /> },
     { id: 'account', label: 'Account', icon: <SettingOutlined /> },
     { id: 'mounts', label: 'Mounts', icon: <LinkOutlined /> },
+    { id: 'sync', label: 'Sync', icon: <SyncOutlined /> },
     { id: 'shortcuts', label: 'Shortcuts', icon: <UnorderedListOutlined /> },
   ];
 
@@ -506,6 +509,7 @@ export default function SettingsModal({
           {tab === 'shortcuts' && <ShortcutsPanel />}
           {tab === 'account' && <SettingsAccountPanel initialAccountId={initialAccountId} />}
           {tab === 'mounts' && <SettingsMountsPanel />}
+          {tab === 'sync' && <SettingsSyncPanel />}
         </div>
       </div>
     </Modal>

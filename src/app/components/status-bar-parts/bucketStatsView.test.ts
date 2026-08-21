@@ -8,6 +8,7 @@ function summary(overrides: Partial<BucketSummary> = {}): BucketSummary {
     totalSize: 5 * 1024 * 1024,
     lastModified: '2026-06-01T00:00:00Z',
     isComplete: true,
+    lastSync: null,
     ...overrides,
   };
 }

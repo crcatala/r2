@@ -7,6 +7,7 @@ import { useSyncStore } from '@/app/stores/syncStore';
 import { useUploadStore } from '@/app/stores/uploadStore';
 import { useDownloadStore } from '@/app/stores/downloadStore';
 import { useMoveStore } from '@/app/stores/moveStore';
+import { formatRelativeTime } from '@/app/utils/relativeTime';
 import SyncOverlay from '@/app/components/SyncOverlay';
 import UpdateChecker from '@/app/components/UpdateChecker';
 import BucketStats from '@/app/components/status-bar-parts/BucketStats';
@@ -20,18 +21,6 @@ interface StatusBarProps {
   isLoadingFiles?: boolean;
   storageConfig: StorageConfig | null;
   selectedCount?: number;
-}
-
-function useRelativeTime(timestamp: number | null): string {
-  if (!timestamp) return '';
-  const diffMs = Date.now() - timestamp;
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return 'just now';
-  if (diffMin === 1) return '1 min ago';
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr === 1) return '1 hr ago';
-  return `${diffHr} hr ago`;
 }
 
 export default function StatusBar({
@@ -57,7 +46,7 @@ export default function StatusBar({
     return bucketSyncTimes[key] ?? null;
   }, [storageConfig?.accountId, storageConfig?.bucket, bucketSyncTimes, currentBucketKey]);
 
-  const relativeTime = useRelativeTime(lastSyncTime);
+  const relativeTime = formatRelativeTime(lastSyncTime);
 
   // Transfer counts from stores
   const uploadTasks = useUploadStore((s) => s.tasks);

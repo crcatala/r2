@@ -49,6 +49,8 @@ pub struct BucketSummaryResponse {
     pub last_modified: Option<String>,
     #[serde(rename = "isComplete")]
     pub is_complete: bool,
+    #[serde(rename = "lastSync")]
+    pub last_sync: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,6 +168,7 @@ pub async fn get_bucket_summary() -> Result<BucketSummaryResponse, String> {
         total_size: summary.total_size,
         last_modified: summary.last_modified,
         is_complete: summary.is_complete,
+        last_sync: summary.last_sync,
     })
 }
 
