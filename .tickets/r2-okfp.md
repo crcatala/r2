@@ -1,6 +1,6 @@
 ---
 id: r2-okfp
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-08-17T14:24:38Z
