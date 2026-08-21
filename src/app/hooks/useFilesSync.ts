@@ -12,7 +12,7 @@ import { useFolderSizeStore } from '@/app/stores/folderSizeStore';
 import { useSyncStore, SyncPhase } from '@/app/stores/syncStore';
 import {
   useSyncSettingsStore,
-  shouldAutoSync,
+  shouldStartBackgroundSync,
   resolveBucketSyncSettings,
   makeBucketKey,
 } from '@/app/stores/settingsStore';
@@ -158,13 +158,23 @@ export function useFilesSync(config: StorageConfig | null) {
   // re-listing it immediately gains nothing. Re-runs on settings changes so
   // a mode change (e.g. to Periodic) takes effect immediately; "Sync now"
   // remains available for immediate sync.
+  const autoStartConfigRef = useRef<StorageConfig | null>(null);
+
   useEffect(() => {
     if (!isConfigReady || !config) return;
+    autoStartConfigRef.current = config;
 
     const bucketKey = makeBucketKey(config.provider, config.accountId, config.bucket);
-    if (bgStartedRef.current === bucketKey) return; // Already started for this bucket
+    const isSameBucket = bgStartedRef.current === bucketKey;
 
-    bgStartedRef.current = bucketKey;
+    if (isSameBucket) {
+      // This re-run was caused by a settings change, not a bucket switch.
+      // Never interrupt an in-flight sync — let it finish; the next trigger
+      // (switch, mode change, refresh) re-evaluates.
+      if (useSyncStore.getState().backgroundSync.isRunning) return;
+    } else {
+      bgStartedRef.current = bucketKey;
+    }
 
     let cancelled = false;
     const run = async () => {
@@ -197,18 +207,17 @@ export function useFilesSync(config: StorageConfig | null) {
       // Per-bucket overrides (r2-c6gg) win field-by-field over global settings.
       const resolved = resolveBucketSyncSettings(bucketKey, settings.bucketOverrides, settings);
       // A bucket that has *never* been fully synced gets one full sync on its
-      // first view, even with auto-sync Off: otherwise a fresh connection
-      // shows only a TTL-bounded lazy browse and no background catalog at all
-      // until the user finds the manual "Sync now". Overrides respected.
-      const neverFullySynced = lastSync == null;
-      const shouldSync = neverFullySynced
-        ? resolved.mode !== 'off'
-        : shouldAutoSync({
-            mode: resolved.mode,
-            lastSyncMs: lastSync,
-            freshnessSecs: resolved.freshnessSecs,
-            nowMs: Date.now(),
-          });
+      // first view even with global auto-sync Off (bootstrap — see
+      // shouldStartBackgroundSync). An explicit per-bucket "Never auto-sync"
+      // override still wins.
+      const shouldSync = shouldStartBackgroundSync({
+        mode: resolved.mode,
+        lastSyncMs: lastSync,
+        freshnessSecs: resolved.freshnessSecs,
+        nowMs: Date.now(),
+        globalAutoSyncOff: settings.autoSyncMode === 'off',
+        explicitlyOptedOut: settings.bucketOverrides[bucketKey]?.autoSyncMode === 'off',
+      });
 
       if (!shouldSync) {
         // Fresh enough or auto-sync off: serve from the local cache. Still
@@ -248,8 +257,20 @@ export function useFilesSync(config: StorageConfig | null) {
 
     return () => {
       cancelled = true;
-      cancelBackgroundSync().catch(() => {});
-      bgStartedRef.current = null;
+      // Cancel the backend only when leaving this bucket — a settings-only
+      // re-run must not cancel an in-flight sync (review). bgStartedRef stays
+      // set on a settings re-run so the effect recognizes it as the same
+      // bucket next time.
+      const latest = autoStartConfigRef.current;
+      const leftBucket =
+        latest == null ||
+        latest.provider !== config.provider ||
+        latest.accountId !== config.accountId ||
+        latest.bucket !== config.bucket;
+      if (leftBucket) {
+        cancelBackgroundSync().catch(() => {});
+        bgStartedRef.current = null;
+      }
     };
   }, [
     isConfigReady,

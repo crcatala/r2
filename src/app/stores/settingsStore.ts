@@ -135,6 +135,34 @@ export function shouldAutoSync(params: {
   return nowMs - lastSyncMs >= freshnessSecs * 1000;
 }
 
+/**
+ * Full "should the background sync start now" decision, shared by useFilesSync
+ * and unit tests.
+ *
+ * Normal gate: `shouldAutoSync` (mode + freshness window).
+ *
+ * Bootstrap: a bucket that has *never* been fully synced gets one full sync on
+ * its first view even when the GLOBAL auto-sync mode is Off — otherwise a
+ * fresh connection with Off shows only a TTL-bounded lazy browse with no
+ * background catalog until the user finds the manual "Sync now". An explicit
+ * per-bucket "Never auto-sync" override still wins over the bootstrap.
+ */
+export function shouldStartBackgroundSync(params: {
+  mode: AutoSyncMode;
+  lastSyncMs: number | null;
+  freshnessSecs: number;
+  nowMs: number;
+  /** Global autoSyncMode is 'off' (used to detect the bootstrap case). */
+  globalAutoSyncOff: boolean;
+  /** The bucket itself has an explicit 'off' override. */
+  explicitlyOptedOut: boolean;
+}): boolean {
+  const { mode, lastSyncMs, freshnessSecs, nowMs, globalAutoSyncOff, explicitlyOptedOut } = params;
+  if (shouldAutoSync({ mode, lastSyncMs, freshnessSecs, nowMs })) return true;
+  if (lastSyncMs == null && globalAutoSyncOff && !explicitlyOptedOut) return true;
+  return false;
+}
+
 export const useSyncSettingsStore = create<SyncSettingsState>()(
   persist(
     (set) => ({
