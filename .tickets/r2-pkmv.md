@@ -35,3 +35,9 @@ Freshness window comparison uses the hydrated lastSync. Skip must not clear fold
 - After app restart, isSynced is true for a previously-synced bucket before any sync runs (hydration).
 - refresh() still forces a full bucket sync.
 
+
+## Notes
+
+**2026-08-21T09:24:35Z**
+
+Phase 1 implemented in PR #5 (feat/r2-bctw-sync-freshness-controls). Awaiting review/merge; close on merge.

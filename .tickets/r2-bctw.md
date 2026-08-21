@@ -23,3 +23,9 @@ Phase 2 (documented, deferred): configurable folder browse TTL, periodic auto-sy
 
 Phase 1: switching to a recently-synced bucket does not re-list it; last-synced survives restart; auto-sync can be turned off with a manual Sync now path; folder refresh hits the network; sidebar shows relative last-synced with staleness. Phase 2 tickets tracked separately below.
 
+
+## Notes
+
+**2026-08-21T09:24:35Z**
+
+Phase 1 implemented in PR #5 (feat/r2-bctw-sync-freshness-controls). Awaiting review/merge; close on merge.

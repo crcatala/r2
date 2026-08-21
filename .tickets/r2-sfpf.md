@@ -29,3 +29,9 @@ Uses the hydrated bucketSyncTimes (r2-vq87 + hydration in r2-pkmv), so times sur
 - With auto-sync Off and a stale/never-synced bucket, the label is amber with a Stale/Not synced state and a tooltip.
 - StatusBar relative time unchanged (same util).
 
+
+## Notes
+
+**2026-08-21T09:24:35Z**
+
+Phase 1 implemented in PR #5 (feat/r2-bctw-sync-freshness-controls). Awaiting review/merge; close on merge.

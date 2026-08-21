@@ -30,3 +30,9 @@ Toolbar refresh = folder-level (expectation: "show me fresh data here, fast"). F
 - Upload/delete/move invalidations are unchanged (cache-friendly refresh()).
 - Manual sync works with auto-sync Off.
 
+
+## Notes
+
+**2026-08-21T09:24:35Z**
+
+Phase 1 implemented in PR #5 (feat/r2-bctw-sync-freshness-controls). Awaiting review/merge; close on merge.
