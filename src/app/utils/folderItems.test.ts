@@ -73,6 +73,28 @@ describe('loadFolderItems', () => {
     expect(calls).toEqual([{ forceRefresh: true }]);
   });
 
+  test('marks a cache-served prefix listing (from_cache) so callers do not stamp a fake sync', async () => {
+    const result = await loadFolderItems({
+      config: { bucket: 'secret' },
+      prefix: '',
+      readCachedFolder: async () => staleCache,
+      readPrefixFolder: async () => ({ ...liveRoot, from_cache: true }),
+    });
+
+    expect(result.source).toBe('cache-prefix');
+  });
+
+  test('a network prefix listing is reported as prefix (a real round-trip)', async () => {
+    const result = await loadFolderItems({
+      config: { bucket: 'secret' },
+      prefix: '',
+      readCachedFolder: async () => staleCache,
+      readPrefixFolder: async () => liveRoot, // from_cache: false
+    });
+
+    expect(result.source).toBe('prefix');
+  });
+
   test('falls back to SQLite cache when prefix listing fails', async () => {
     const result = await loadFolderItems({
       config: { bucket: 'secret' },

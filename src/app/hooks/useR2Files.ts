@@ -75,6 +75,10 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
           readPrefixFolder: listPrefix,
         });
 
+        // Only a genuine network LIST (source 'prefix') marks the bucket as
+        // freshly browsed — a cache-served listing (from_cache) means nothing
+        // synced, so it must not stamp "Synced just now" on the sidebar or
+        // fool the freshness gate.
         if (result.source === 'prefix') {
           useSyncStore.getState().setLastSyncTime(config.accountId, config.bucket, Date.now());
         }
