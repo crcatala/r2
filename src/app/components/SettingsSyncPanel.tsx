@@ -187,14 +187,20 @@ export default function SettingsSyncPanel({ highlightBucketKey }: { highlightBuc
     return rows;
   }, [accounts]);
 
-  const overrideCount = useSyncSettingsStore((s) => Object.keys(s.bucketOverrides).length);
+  const bucketOverrides = useSyncSettingsStore((s) => s.bucketOverrides);
+  // Only count overrides for buckets that still exist — a deleted bucket's
+  // stale override must not inflate the pill (r2-c6gg review).
+  const overrideCount = bucketRows.filter((r) => bucketOverrides[r.key]).length;
 
   // Scroll a highlighted override row into view (opened via sidebar "Sync
-  // settings…").
+  // settings…"). The ref sits on the scrollable list; the active row is the
+  // one carrying the .active class (r2-c6gg review).
   const highlightRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (highlightBucketKey && highlightRef.current) {
-      highlightRef.current.scrollIntoView({ block: 'nearest' });
+      highlightRef.current
+        .querySelector('.sync-override-row.active')
+        ?.scrollIntoView({ block: 'nearest' });
     }
   }, [highlightBucketKey]);
 
@@ -301,9 +307,9 @@ export default function SettingsSyncPanel({ highlightBucketKey }: { highlightBuc
             <h3>Folder cache</h3>
             <p>
               How long a folder&apos;s listing stays cached before re-listing from the network. Only
-              applies before a bucket&apos;s first full sync (or with automatic sync off) — after a
-              full sync the cache is authoritative. &quot;Always refresh&quot; hits the network on
-              every folder open.
+              applies before a bucket&apos;s first full sync — after a full sync the cache is
+              authoritative regardless of the automatic sync mode. &quot;Always refresh&quot; hits
+              the network on every folder open.
             </p>
           </div>
         </div>

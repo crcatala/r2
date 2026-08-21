@@ -30,3 +30,7 @@ Phase 2. Let specific buckets opt out of auto-sync or use a custom freshness win
 **2026-08-21T10:27:06Z**
 
 Implemented in PR (feat/r2-phase2-sync-ttl-periodic-overrides): per-bucket overrides keyed '<provider>:<accountId>:<bucket>' with fields autoSyncMode/freshnessSecs/periodicMin; resolveBucketSyncSettings() merges overrides field-by-field over globals. useFilesSync gate + periodic interval resolve per-bucket. Settings Sync tab lists buckets with per-row controls; sidebar bucket menu gains 'Sync settings…'.
+
+**2026-08-21T10:58:05Z**
+
+Review fixes: 'Sync settings…' deep-link now scrolls the highlighted override row into view; the override count pill only counts buckets that still exist; folder-cache copy corrected (TTL applies only pre-full-sync, not 'with auto-sync off').

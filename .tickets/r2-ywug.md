@@ -32,3 +32,7 @@ Phase 2. Today STALE_THRESHOLD_SECS (60s) in lazy_sync.rs list_prefix is a hardc
 **2026-08-21T10:27:06Z**
 
 Implemented in PR (feat/r2-phase2-sync-ttl-periodic-overrides): LazyListInput gains cache_ttl_secs (default 60, 0 = always network); list_prefix delegates the fresh/stale decision to pure should_serve_from_cache() with unit tests. Frontend: folderCacheTtlSecs setting (0/15s/30s/1m/5m/15m/30m/1h) wired through r2cache.listPrefix -> useR2Files. Full-sync authoritative path unchanged.
+
+**2026-08-21T10:58:05Z**
+
+Review fixes: staleTime in useR2Files is now 0 when folderCacheTtlSecs=0 (Always refresh actually re-lists on every folder revisit); restored the get_prefix_sync_time short-circuit when a full sync exists.
