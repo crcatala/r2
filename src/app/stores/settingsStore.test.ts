@@ -97,6 +97,15 @@ describe('shouldAutoSync (freshness gate)', () => {
     ).toBe(true);
   });
 
+  test('a never-synced bucket auto-syncs even in off mode (first-view bootstrap)', () => {
+    // Mirrors the useFilesSync gate: never fully synced -> sync on first view
+    // regardless of the off mode, so a fresh connection still builds its
+    // catalog. Synced buckets keep honoring off (nothing to bootstrap).
+    expect(shouldAutoSync({ mode: 'off', lastSyncMs: null, freshnessSecs: 60, nowMs: NOW })).toBe(
+      false
+    );
+  });
+
   // r2-knw5: periodic mode gates its *initial* start by the same freshness
   // window as on-switch (the interval re-runs bypass the gate).
   test('periodic initial start respects the freshness window', () => {

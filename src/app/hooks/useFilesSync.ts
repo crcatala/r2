@@ -196,12 +196,19 @@ export function useFilesSync(config: StorageConfig | null) {
       const lastSync = useSyncStore.getState().getLastSyncTime(config.accountId, config.bucket);
       // Per-bucket overrides (r2-c6gg) win field-by-field over global settings.
       const resolved = resolveBucketSyncSettings(bucketKey, settings.bucketOverrides, settings);
-      const shouldSync = shouldAutoSync({
-        mode: resolved.mode,
-        lastSyncMs: lastSync,
-        freshnessSecs: resolved.freshnessSecs,
-        nowMs: Date.now(),
-      });
+      // A bucket that has *never* been fully synced gets one full sync on its
+      // first view, even with auto-sync Off: otherwise a fresh connection
+      // shows only a TTL-bounded lazy browse and no background catalog at all
+      // until the user finds the manual "Sync now". Overrides respected.
+      const neverFullySynced = lastSync == null;
+      const shouldSync = neverFullySynced
+        ? resolved.mode !== 'off'
+        : shouldAutoSync({
+            mode: resolved.mode,
+            lastSyncMs: lastSync,
+            freshnessSecs: resolved.freshnessSecs,
+            nowMs: Date.now(),
+          });
 
       if (!shouldSync) {
         // Fresh enough or auto-sync off: serve from the local cache. Still

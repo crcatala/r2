@@ -1,5 +1,6 @@
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 interface CacheUpdatedEvent {
   action: 'delete' | 'move' | 'update';
@@ -32,18 +33,30 @@ function getParentPath(path: string): string {
   return `${withoutTrailing.slice(0, lastSlash + 1)}`;
 }
 
-export const useCurrentPathStore = create<CurrentPathStore>((set, get) => ({
-  currentPath: '',
-  cacheUpdatedPaths: [],
-  removedPaths: [],
-  createdPaths: [],
-  setCurrentPath: (path) => set({ currentPath: path }),
-  goToParent: () => {
-    const { currentPath } = get();
-    set({ currentPath: getParentPath(currentPath) });
-  },
-  reset: () => set({ currentPath: '' }),
-}));
+export const useCurrentPathStore = create<CurrentPathStore>()(
+  persist(
+    (set, get) => ({
+      currentPath: '',
+      cacheUpdatedPaths: [],
+      removedPaths: [],
+      createdPaths: [],
+      setCurrentPath: (path) => set({ currentPath: path }),
+      goToParent: () => {
+        const { currentPath } = get();
+        set({ currentPath: getParentPath(currentPath) });
+      },
+      reset: () => set({ currentPath: '' }),
+    }),
+    {
+      name: 'current-path-storage',
+      version: 1,
+      // Persist only the browsing path; the event batches are transient and
+      // must never be restored across restarts.
+      partialize: (state) => ({ currentPath: state.currentPath }),
+      storage: createJSONStorage(() => localStorage),
+    }
+  )
+);
 
 let unlistenCacheUpdated: UnlistenFn | undefined;
 let unlistenPathsRemoved: UnlistenFn | undefined;

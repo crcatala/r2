@@ -175,6 +175,8 @@ export default function Home() {
     setFocusedItem(null);
     setShowInspector(false);
 
+    // Reset browsing state on bucket/account change only — the current path
+    // is persisted across restarts and reused when the same bucket reopens.
     resetCurrentPath();
     setSearchQuery('');
     resetBatchOperation();
