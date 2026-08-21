@@ -22,6 +22,7 @@ import { detectOs, revealActionLabel } from '@/app/utils/mount';
 import { useThemeStore } from '@/app/stores/themeStore';
 import { useCurrentPathStore } from '@/app/stores/currentPathStore';
 import { syncBucketNow, type StorageConfig } from '@/app/lib/r2cache';
+import { makeBucketKey } from '@/app/stores/settingsStore';
 import AccountTransferModal from '@/app/components/AccountTransferModal';
 import {
   AccountRow,
@@ -35,7 +36,8 @@ interface AccountSidebarProps {
   onEditAccount: (account: ProviderAccount) => void;
   onAddToken: (accountId: string) => void;
   onEditToken: (token: Token) => void;
-  onOpenSettings?: (tab?: SettingsTab) => void;
+  /** Open settings, optionally deep-linking to a tab and a bucket override row. */
+  onOpenSettings?: (tab?: SettingsTab, bucketKey?: string) => void;
 }
 
 export default function AccountSidebar({
@@ -398,6 +400,8 @@ export default function AccountSidebar({
       currentConfig?.account_id === accountData.account.id &&
       currentConfig?.bucket === bucketName;
 
+    const syncKey = makeBucketKey(accountData.provider, accountData.account.id, bucketName);
+
     const syncItem: NonNullable<MenuProps['items']>[number] | null = isCurrentBucket
       ? {
           key: 'sync',
@@ -410,9 +414,20 @@ export default function AccountSidebar({
         }
       : null;
 
+    const syncSettingsItem: NonNullable<MenuProps['items']>[number] = {
+      key: 'sync-settings',
+      label: 'Sync settings…',
+      icon: <SettingOutlined />,
+      onClick: (e) => {
+        e.domEvent.stopPropagation();
+        onOpenSettings?.('sync', syncKey);
+      },
+    };
+
     if (mount) {
       return [
         ...(syncItem ? [syncItem] : []),
+        syncSettingsItem,
         {
           key: 'reveal',
           label: revealActionLabel(os),
@@ -437,6 +452,7 @@ export default function AccountSidebar({
 
     return [
       ...(syncItem ? [syncItem] : []),
+      syncSettingsItem,
       {
         key: 'mount',
         label: 'Mount as local drive',

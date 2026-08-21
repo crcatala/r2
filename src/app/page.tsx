@@ -79,6 +79,7 @@ export default function Home() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
+  const [settingsBucketKey, setSettingsBucketKey] = useState<string | undefined>(undefined);
   const [legacyCredentialCount, setLegacyCredentialCount] = useState(0);
   const [showLegacyCredentialNotice, setShowLegacyCredentialNotice] = useState(false);
 
@@ -1139,8 +1140,9 @@ export default function Home() {
           onEditAccount={handleEditAccount}
           onAddToken={handleAddToken}
           onEditToken={handleEditToken}
-          onOpenSettings={(tab) => {
+          onOpenSettings={(tab, bucketKey) => {
             setSettingsTab(tab ?? 'account');
+            setSettingsBucketKey(bucketKey);
             setSettingsOpen(true);
           }}
         />
@@ -1162,10 +1164,12 @@ export default function Home() {
               onUploadOpen={() => setUploadModalOpen(true)}
               onSettingsOpen={() => {
                 setSettingsTab('account');
+                setSettingsBucketKey(undefined);
                 setSettingsOpen(true);
               }}
               onAppearanceOpen={() => {
                 setSettingsTab('appearance');
+                setSettingsBucketKey(undefined);
                 setSettingsOpen(true);
               }}
               bucketName={currentConfig?.bucket ?? null}
@@ -1340,8 +1344,12 @@ export default function Home() {
 
             <SettingsModal
               open={settingsOpen}
-              onClose={() => setSettingsOpen(false)}
+              onClose={() => {
+                setSettingsOpen(false);
+                setSettingsBucketKey(undefined);
+              }}
               initialTab={settingsTab}
+              initialBucketOverrideKey={settingsBucketKey}
             />
 
             {mountModalOpen && <MountModal />}

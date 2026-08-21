@@ -33,6 +33,8 @@ export interface LazyPrefixResult {
 
 export interface ListPrefixOptions {
   forceRefresh?: boolean;
+  /** Folder browse TTL in seconds (r2-ywug); forwarded to the prefix reader. */
+  cacheTtlSecs?: number;
 }
 
 export interface LoadFolderItemsResult {
@@ -44,6 +46,7 @@ interface LoadFolderItemsOptions<Config> {
   config: Config;
   prefix: string;
   forceRefresh?: boolean;
+  cacheTtlSecs?: number;
   readCachedFolder: (prefix: string) => Promise<FolderContents>;
   readAllCachedFiles?: () => Promise<StoredFolderFile[]>;
   readPrefixFolder: (
@@ -139,6 +142,7 @@ export async function loadFolderItems<Config>({
   config,
   prefix,
   forceRefresh = false,
+  cacheTtlSecs,
   readCachedFolder,
   readAllCachedFiles,
   readPrefixFolder,
@@ -146,7 +150,7 @@ export async function loadFolderItems<Config>({
   const cached = await readCachedFolder(prefix);
 
   try {
-    const prefixResult = await readPrefixFolder(config, prefix, { forceRefresh });
+    const prefixResult = await readPrefixFolder(config, prefix, { forceRefresh, cacheTtlSecs });
     return {
       items: buildFileItems(lazyFilesToStored(prefixResult.files), prefixResult.folders, prefix),
       source: 'prefix',

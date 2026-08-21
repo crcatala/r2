@@ -10,7 +10,12 @@ import {
 } from '@/app/lib/r2cache';
 import { useFolderSizeStore } from '@/app/stores/folderSizeStore';
 import { useSyncStore, SyncPhase } from '@/app/stores/syncStore';
-import { useSyncSettingsStore, shouldAutoSync } from '@/app/stores/settingsStore';
+import {
+  useSyncSettingsStore,
+  shouldAutoSync,
+  resolveBucketSyncSettings,
+  makeBucketKey,
+} from '@/app/stores/settingsStore';
 
 interface BackgroundSyncProgressEvent {
   objects_fetched: number;
@@ -145,7 +150,7 @@ export function useFilesSync(config: StorageConfig | null) {
   useEffect(() => {
     if (!isConfigReady || !config) return;
 
-    const bucketKey = `${config.provider}:${config.accountId}:${config.bucket}`;
+    const bucketKey = makeBucketKey(config.provider, config.accountId, config.bucket);
     if (bgStartedRef.current === bucketKey) return; // Already started for this bucket
 
     bgStartedRef.current = bucketKey;
@@ -178,10 +183,12 @@ export function useFilesSync(config: StorageConfig | null) {
 
       const settings = useSyncSettingsStore.getState();
       const lastSync = useSyncStore.getState().getLastSyncTime(config.accountId, config.bucket);
+      // Per-bucket overrides (r2-c6gg) win field-by-field over global settings.
+      const resolved = resolveBucketSyncSettings(bucketKey, settings.bucketOverrides, settings);
       const shouldSync = shouldAutoSync({
-        mode: settings.autoSyncMode,
+        mode: resolved.mode,
         lastSyncMs: lastSync,
-        freshnessSecs: settings.autoSyncFreshnessSecs,
+        freshnessSecs: resolved.freshnessSecs,
         nowMs: Date.now(),
       });
 
@@ -227,6 +234,48 @@ export function useFilesSync(config: StorageConfig | null) {
       bgStartedRef.current = null;
     };
   }, [isConfigReady, config?.provider, config?.accountId, config?.bucket, queryClient]);
+
+  // Periodic auto-sync (r2-knw5 + r2-c6gg): while the resolved mode for the
+  // current bucket is 'periodic', re-run the full background sync every
+  // periodMin. The interval resets on config/settings changes; a tick is
+  // skipped while any sync is already in flight so runs never overlap.
+  const autoSyncMode = useSyncSettingsStore((s) => s.autoSyncMode);
+  const autoSyncPeriodMin = useSyncSettingsStore((s) => s.autoSyncPeriodMin);
+  const bucketOverrides = useSyncSettingsStore((s) => s.bucketOverrides);
+
+  useEffect(() => {
+    if (!isConfigReady || !config) return;
+
+    const bucketKey = makeBucketKey(config.provider, config.accountId, config.bucket);
+    const resolved = resolveBucketSyncSettings(bucketKey, bucketOverrides, {
+      autoSyncMode,
+      autoSyncFreshnessSecs: 0, // the interval re-runs unconditionally
+      autoSyncPeriodMin,
+    });
+    if (resolved.mode !== 'periodic') return;
+
+    const periodMs = resolved.periodMin * 60_000;
+    const id = window.setInterval(async () => {
+      if (useSyncStore.getState().backgroundSync.isRunning) return;
+      try {
+        await syncBucketNow(config);
+      } catch (err) {
+        console.error('Periodic sync failed:', err);
+        useSyncStore
+          .getState()
+          .failBackgroundSync(err instanceof Error ? err.message : String(err));
+      }
+    }, periodMs);
+    return () => window.clearInterval(id);
+  }, [
+    isConfigReady,
+    config?.provider,
+    config?.accountId,
+    config?.bucket,
+    autoSyncMode,
+    autoSyncPeriodMin,
+    bucketOverrides,
+  ]);
 
   // Background sync state for return values
   const backgroundSync = useSyncStore((state) => state.backgroundSync);

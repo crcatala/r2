@@ -1,6 +1,6 @@
 ---
 id: r2-twoe
-status: open
+status: closed
 deps: [r2-d99z]
 links: []
 created: 2026-08-21T09:14:37Z

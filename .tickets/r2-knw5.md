@@ -25,3 +25,9 @@ Phase 2. Add a periodic auto-sync: while a bucket is selected, re-run the backgr
 - No overlapping syncs; switching buckets resets the timer; unmount/off disables it.
 - Interval and mode persist across restarts.
 
+
+## Notes
+
+**2026-08-21T10:27:06Z**
+
+Implemented in PR (feat/r2-phase2-sync-ttl-periodic-overrides): autoSyncMode gains 'periodic' + autoSyncPeriodMin (5/15/30/60, default 15). useFilesSync schedules an interval that runs syncBucketNow for the current bucket, skips ticks while backgroundSync.isRunning, resets on config/settings change. Initial start still respects the freshness window. Settings Sync tab: mode segment + interval select.
