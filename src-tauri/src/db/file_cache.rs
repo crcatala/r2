@@ -45,11 +45,20 @@ pub struct CachedDirectoryNode {
 pub fn get_table_sql() -> &'static str {
     "
     -- File cache tables (replaces IndexedDB)
-    -- Idempotent CREATE IF NOT EXISTS only: this runs on EVERY app start, so
-    -- it must never DROP cached_files/directory_tree (a one-time IndexedDB
-    -- migration mistake that wiped all synced listings on each launch while
-    -- leaving sync_meta intact — a bucket then showed 'synced just now' but
-    -- was empty, and has_full_sync kept serving the empty cache).
+    -- Idempotent CREATE IF NOT EXISTS only: this runs on EVERY app start, so it
+    -- must never DROP cached_files/directory_tree. Origin of the DROPs: the
+    -- 2026-01-02 schema change that added parent_path/name to cached_files
+    -- migrated crudely with DROP + CREATE and left it in this startup path,
+    -- wiping all synced listings on each launch while sync_meta survived — a
+    -- bucket then showed 'synced just now' but was empty, and has_full_sync
+    -- kept serving the empty cache.
+    --
+    -- Known limitation (deferred, not a supported upgrade path): a DB created
+    -- before that 2026-01-02 change (no parent_path/name columns, source-only
+    -- builds Dec 2025, no releases exist) would not be migrated by CREATE IF
+    -- NOT EXISTS and parent_path lookups would fail. Population is ~zero; if
+    -- the schema ever changes again, introduce a real migration convention
+    -- (PRAGMA user_version) instead of another DROP.
     CREATE TABLE IF NOT EXISTS cached_files (
         bucket TEXT NOT NULL,
         account_id TEXT NOT NULL,
