@@ -1,6 +1,6 @@
 ---
 id: r2-bctw
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-08-21T09:14:12Z
