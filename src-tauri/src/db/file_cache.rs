@@ -45,9 +45,20 @@ pub struct CachedDirectoryNode {
 pub fn get_table_sql() -> &'static str {
     "
     -- File cache tables (replaces IndexedDB)
-    -- Drop old table to recreate with new schema
-    DROP TABLE IF EXISTS cached_files;
-    
+    -- Idempotent CREATE IF NOT EXISTS only: this runs on EVERY app start, so it
+    -- must never DROP cached_files/directory_tree. Origin of the DROPs: the
+    -- 2026-01-02 schema change that added parent_path/name to cached_files
+    -- migrated crudely with DROP + CREATE and left it in this startup path,
+    -- wiping all synced listings on each launch while sync_meta survived — a
+    -- bucket then showed 'synced just now' but was empty, and has_full_sync
+    -- kept serving the empty cache.
+    --
+    -- Known limitation (deferred, not a supported upgrade path): a DB created
+    -- before that 2026-01-02 change (no parent_path/name columns, source-only
+    -- builds Dec 2025, no releases exist) would not be migrated by CREATE IF
+    -- NOT EXISTS and parent_path lookups would fail. Population is ~zero; if
+    -- the schema ever changes again, introduce a real migration convention
+    -- (PRAGMA user_version) instead of another DROP.
     CREATE TABLE IF NOT EXISTS cached_files (
         bucket TEXT NOT NULL,
         account_id TEXT NOT NULL,
@@ -60,9 +71,6 @@ pub fn get_table_sql() -> &'static str {
         PRIMARY KEY (bucket, account_id, key)
     );
 
-    -- Drop old directory_tree to recreate with new schema
-    DROP TABLE IF EXISTS directory_tree;
-    
     CREATE TABLE IF NOT EXISTS directory_tree (
         bucket TEXT NOT NULL,
         account_id TEXT NOT NULL,
@@ -1042,4 +1050,24 @@ pub async fn upsert_prefix_files(
 
     conn.execute("COMMIT", ()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_table_sql;
+
+    #[test]
+    fn file_cache_sql_is_idempotent_and_non_destructive() {
+        let sql = get_table_sql();
+        // Regression: this SQL runs on every app start, so the one-time
+        // IndexedDB-migration DROPs must NOT run here. They wiped all synced
+        // listings on each launch while sync_meta survived — leaving a bucket
+        // that reported "synced just now" but was empty, with has_full_sync
+        // keeping list_prefix serving the empty cache forever.
+        assert!(!sql.contains("DROP TABLE IF EXISTS cached_files"));
+        assert!(!sql.contains("DROP TABLE IF EXISTS directory_tree"));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS cached_files"));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS directory_tree"));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_meta"));
+    }
 }
