@@ -389,8 +389,30 @@ export default function AccountSidebar({
   ): MenuProps['items'] {
     const mount = findMount(mounts, accountData.provider, accountData.account.id, bucketName);
 
+    // "Sync now" runs against the *selected* bucket's client, and its
+    // progress/completion events are attributed to the current selection
+    // (backgroundSync is global in syncStore). Only offer it for the currently
+    // selected bucket to avoid stamping the wrong bucket's last-sync/counts.
+    const isCurrentBucket =
+      currentConfig?.provider === accountData.provider &&
+      currentConfig?.account_id === accountData.account.id &&
+      currentConfig?.bucket === bucketName;
+
+    const syncItem: NonNullable<MenuProps['items']>[number] | null = isCurrentBucket
+      ? {
+          key: 'sync',
+          label: 'Sync now',
+          icon: <SyncOutlined />,
+          onClick: (e) => {
+            e.domEvent.stopPropagation();
+            handleSyncBucket(accountData, bucketName, token);
+          },
+        }
+      : null;
+
     if (mount) {
       return [
+        ...(syncItem ? [syncItem] : []),
         {
           key: 'reveal',
           label: revealActionLabel(os),
@@ -414,15 +436,7 @@ export default function AccountSidebar({
     }
 
     return [
-      {
-        key: 'sync',
-        label: 'Sync now',
-        icon: <SyncOutlined />,
-        onClick: (e) => {
-          e.domEvent.stopPropagation();
-          handleSyncBucket(accountData, bucketName, token);
-        },
-      },
+      ...(syncItem ? [syncItem] : []),
       {
         key: 'mount',
         label: 'Mount as local drive',

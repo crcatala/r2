@@ -75,11 +75,14 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
 
         return result.items;
       } catch (err) {
+        // No cache fallback was available — propagate so callers can tell a
+        // real failure apart from an empty folder. forceRefreshFolder must
+        // not overwrite the list with [] on failure (r2-twoe review).
         console.warn('[useR2Files] failed to load prefix and no cache fallback was available:', {
           prefix,
           err,
         });
-        return [];
+        throw err;
       }
     },
     [config, prefix]
@@ -87,7 +90,15 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
 
   const query = useQuery({
     queryKey,
-    queryFn: () => loadFolder(false),
+    // Preserve the pre-existing swallow for initial loads: a failed first
+    // load renders an empty list rather than surfacing an error state.
+    queryFn: async () => {
+      try {
+        return await loadFolder(false);
+      } catch {
+        return [];
+      }
+    },
     // Enable immediately when config is ready — lazy sync handles missing cache
     enabled: isConfigReady,
     retry: 1,
@@ -173,8 +184,9 @@ export function useR2Files(config: StorageConfig | null, prefix: string = '') {
   /**
    * Re-list the current folder from the remote (bypasses the cache
    * freshness shortcut) and write the result into the query cache.
-   * Toolbar refresh / ⌘R use this; upload/delete/move invalidation keeps
-   * using refresh() so it stays cache-friendly.
+   * Throws when there is no cache fallback and the LIST fails, so callers
+   * (page.tsx handleRefresh) can toast a failure — the list is never
+   * overwritten with [] on error.
    */
   async function forceRefreshFolder() {
     if (!config) return;

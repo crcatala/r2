@@ -155,14 +155,22 @@ export function useFilesSync(config: StorageConfig | null) {
       // Hydrate the persisted last-sync time (sync_meta) up front so isSynced
       // and the StatusBar/sidebar reflect stored state even when we skip,
       // and so the gate has a timestamp to compare against after restarts.
+      //
+      // Units: sync_meta.last_sync is Unix *seconds* (chrono timestamp),
+      // while bucketSyncTimes stores epoch *milliseconds* (Date.now()) —
+      // convert here so the gate and relative-time labels see one unit.
+      // When the bucket was never fully synced, clear any stamp left by a
+      // folder browse so the gate still re-syncs partial buckets on switch.
       try {
         const summary = await getBucketSummary();
         if (cancelled) return;
-        if (summary.lastSync != null) {
-          useSyncStore
-            .getState()
-            .setLastSyncTime(config.accountId, config.bucket, summary.lastSync);
-        }
+        useSyncStore
+          .getState()
+          .setLastSyncTime(
+            config.accountId,
+            config.bucket,
+            summary.lastSync != null ? summary.lastSync * 1000 : null
+          );
       } catch {
         // Non-fatal: the gate falls back to syncing.
       }
